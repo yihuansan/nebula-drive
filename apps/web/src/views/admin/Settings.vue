@@ -200,6 +200,11 @@ function applyTheme(theme: string) {
 const saving = ref(false);
 const bgUploading = ref(false);
 const logoUploading = ref(false);
+const logoFileInput = ref<HTMLInputElement | null>(null);
+
+function triggerLogoUpload() {
+  logoFileInput.value?.click();
+}
 
 // 更新检查
 const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean } | null>(null);
@@ -406,14 +411,14 @@ onMounted(load);
           <div class="field">
             <label>系统 Logo</label>
             <div class="logo-row">
-              <div class="logo-upload-box" @click="document.querySelector('.logo-file-input')?.click()">
+              <div class="logo-upload-box" @click="triggerLogoUpload">
                 <img v-if="form.logo" :src="form.logo" class="logo-preview" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
                 <span v-else class="logo-placeholder">点击上传</span>
               </div>
               <div class="logo-actions">
-                <el-button :loading="logoUploading" size="small" @click="document.querySelector('.logo-file-input')?.click()">选择图片</el-button>
+                <el-button :loading="logoUploading" size="small" @click="triggerLogoUpload">选择图片</el-button>
                 <el-button v-if="form.logo" size="small" @click="form.logo = ''">移除</el-button>
-                <input type="file" accept="image/*" class="logo-file-input" hidden @change="onLogoFile" />
+                <input ref="logoFileInput" type="file" accept="image/*" class="logo-file-input" @change="onLogoFile" />
               </div>
             </div>
           </div>
