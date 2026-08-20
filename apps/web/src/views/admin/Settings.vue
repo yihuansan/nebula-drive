@@ -29,6 +29,9 @@ const form = ref({
   loginCaptchaThreshold: 3,
 });
 
+// 选项卡
+const activeTab = ref<'general' | 'security' | 'storage' | 'appearance' | 'nav' | 'update'>('general');
+
 // 预设品牌色
 const presetColors = [
   '#6366f1', // 靛蓝
@@ -53,8 +56,9 @@ const themeList = [
 
 /* ---------- 导航栏自定义 ---------- */
 const navTab = ref<'main' | 'admin'>('main');
-const navDragItem = ref<string | null>(null);
-const navDragOver = ref<string | null>(null);
+const navMouseDrag = ref(false);
+const navMouseDragPath = ref<string | null>(null);
+const navDropTarget = ref<string | null>(null);
 
 const mainMenuAll = [
   { path: '/', label: '文件管理', icon: 'Folder' },
@@ -108,41 +112,7 @@ const currentNavItems = computed(() => {
   });
 });
 
-function onNavDragStart(path: string, e: MouseEvent) {
-  navDragItem.value = path;
-  e.preventDefault();
-}
-
-function onNavDragOver(path: string, e: MouseEvent) {
-  navDragOver.value = path;
-  e.preventDefault();
-}
-
-function onNavDrop(path: string, e: MouseEvent) {
-  e.preventDefault();
-  if (!navDragItem.value || navDragItem.value === path) return;
-  const order = navTab.value === 'main' ? mainMenuOrder.value : adminMenuOrder.value;
-  const from = order.indexOf(navDragItem.value);
-  const to = order.indexOf(path);
-  if (from >= 0 && to >= 0) {
-    order.splice(to, 0, order.splice(from, 1)[0]);
-    saveNavOrder();
-    ElMessage.success('导航顺序已保存');
-  }
-  navDragItem.value = null;
-  navDragOver.value = null;
-}
-
-function onNavDragEnd() {
-  navDragItem.value = null;
-  navDragOver.value = null;
-}
-
 // 鼠标事件拖拽（实时重排 + 动画）
-const navMouseDrag = ref(false);
-const navMouseDragPath = ref<string | null>(null);
-const navDropTarget = ref<string | null>(null);
-
 function onNavMouseDown(path: string, e: MouseEvent) {
   if (e.button !== 0) return;
   navMouseDrag.value = true;
@@ -393,316 +363,207 @@ onMounted(load);
 
 <template>
   <div class="settings-page">
-    <div class="settings-grid">
-      <!-- 基本信息 -->
-      <section class="panel glass-card span2">
-        <div class="panel-head">
-          <div class="panel-icon pi-blue"><el-icon><Document /></el-icon></div>
-          <div>
-            <h3>基本信息</h3>
-            <p>系统名称、Logo 与公告，显示在登录页与全站</p>
+    <!-- 页头 -->
+    <header class="settings-header">
+      <h2>系统设置</h2>
+      <p>管理外观、安全、存储与更新</p>
+    </header>
+
+    <!-- 选项卡 -->
+    <nav class="settings-tabs">
+      <button class="tab-btn" :class="{ active: activeTab === 'general' }" @click="activeTab = 'general'">
+        <el-icon><Document /></el-icon><span>通用</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'security' }" @click="activeTab = 'security'">
+        <el-icon><Lock /></el-icon><span>安全</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'storage' }" @click="activeTab = 'storage'">
+        <el-icon><Box /></el-icon><span>存储</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'appearance' }" @click="activeTab = 'appearance'">
+        <el-icon><Brush /></el-icon><span>外观</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'nav' }" @click="activeTab = 'nav'">
+        <el-icon><Rank /></el-icon><span>导航</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'update' }" @click="activeTab = 'update'">
+        <el-icon><Refresh /></el-icon><span>更新</span>
+      </button>
+    </nav>
+
+    <!-- 内容区 -->
+    <div class="settings-content">
+      <!-- ========== 通用 ========== -->
+      <div v-show="activeTab === 'general'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-blue"><el-icon><Document /></el-icon></div>
+            <div class="card-titles">
+              <h3>基本信息</h3>
+              <p>系统名称、Logo 与公告，显示在登录页与全站</p>
+            </div>
           </div>
-        </div>
-        <div class="fields">
-          <div class="field">
-            <label>系统名称</label>
-            <el-input v-model="form.appName" placeholder="显示在登录页与侧边栏的名称" />
-          </div>
-          <div class="field">
-            <label>系统 Logo</label>
-            <div class="logo-row">
-              <div class="logo-upload-box" @click="triggerLogoUpload">
-                <img v-if="form.logo" :src="form.logo" class="logo-preview" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
-                <span v-else class="logo-placeholder">点击上传</span>
+          <div class="fields-grid">
+            <div class="field">
+              <label>系统名称</label>
+              <el-input v-model="form.appName" placeholder="显示在登录页与侧边栏的名称" />
+            </div>
+            <div class="field">
+              <label>版权页脚</label>
+              <el-input v-model="form.copyright" placeholder="如 © 2025 NebulaDrive" />
+            </div>
+            <div class="field">
+              <label>联系邮箱</label>
+              <el-input v-model="form.contactEmail" placeholder="如 support@example.com" />
+            </div>
+            <div class="field">
+              <label>系统 Logo</label>
+              <div class="logo-row">
+                <div class="logo-upload-box" @click="triggerLogoUpload">
+                  <img v-if="form.logo" :src="form.logo" class="logo-preview" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+                  <span v-else class="logo-placeholder">点击上传</span>
+                </div>
+                <div class="logo-actions">
+                  <el-button :loading="logoUploading" size="small" @click="triggerLogoUpload">选择图片</el-button>
+                  <el-button v-if="form.logo" size="small" @click="form.logo = ''">移除</el-button>
+                  <input ref="logoFileInput" type="file" accept="image/*" class="logo-file-input" @change="onLogoFile" />
+                </div>
               </div>
-              <div class="logo-actions">
-                <el-button :loading="logoUploading" size="small" @click="triggerLogoUpload">选择图片</el-button>
-                <el-button v-if="form.logo" size="small" @click="form.logo = ''">移除</el-button>
-                <input ref="logoFileInput" type="file" accept="image/*" class="logo-file-input" @change="onLogoFile" />
+            </div>
+            <div class="field span2">
+              <label>系统公告</label>
+              <el-input v-model="form.notice" type="textarea" :rows="2" placeholder="显示在登录页下方的公告内容" />
+            </div>
+            <div class="field span2">
+              <label>关于文本</label>
+              <el-input v-model="form.aboutText" type="textarea" :rows="2" placeholder="登录页副标题下方的关于介绍" />
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ========== 安全 ========== -->
+      <div v-show="activeTab === 'security'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-green"><el-icon><Lock /></el-icon></div>
+            <div class="card-titles">
+              <h3>注册与安全</h3>
+              <p>注册开关与账号安全策略</p>
+            </div>
+          </div>
+          <div class="settings-rows">
+            <div class="s-row">
+              <span class="s-label">开放注册</span>
+              <div class="s-control">
+                <el-switch v-model="form.registerEnabled" />
+                <span class="s-hint">控制新用户能否自行注册</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">密码最小长度</span>
+              <div class="s-control">
+                <el-input-number v-model="form.minPasswordLen" :min="4" :max="32" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">位</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">会话有效期</span>
+              <div class="s-control">
+                <el-select v-model="form.sessionTimeoutHours" size="small">
+                  <el-option :value="24" label="1 天" />
+                  <el-option :value="72" label="3 天" />
+                  <el-option :value="168" label="7 天" />
+                  <el-option :value="336" label="14 天" />
+                  <el-option :value="720" label="30 天" />
+                  <el-option :value="4320" label="180 天" />
+                </el-select>
+                <span class="s-hint">登录后保持多久</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">登录验证码</span>
+              <div class="s-control">
+                <el-input-number v-model="form.loginCaptchaThreshold" :min="0" :max="10" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">次失败后 · 0 = 关闭</span>
               </div>
             </div>
           </div>
-          <div class="field">
-            <label>版权页脚</label>
-            <el-input v-model="form.copyright" placeholder="如 © 2025 NebulaDrive" />
-          </div>
-          <div class="field">
-            <label>联系邮箱</label>
-            <el-input v-model="form.contactEmail" placeholder="如 support@example.com" />
-          </div>
-          <div class="field span2">
-            <label>系统公告</label>
-            <el-input v-model="form.notice" type="textarea" :rows="2" placeholder="显示在登录页下方的公告内容" />
-          </div>
-          <div class="field span2">
-            <label>关于文本</label>
-            <el-input v-model="form.aboutText" type="textarea" :rows="2" placeholder="登录页副标题下方的关于介绍" />
-          </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
-      <!-- 注册与安全 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-green"><el-icon><Lock /></el-icon></div>
-          <div>
-            <h3>注册与安全</h3>
-            <p>注册开关与账号安全策略</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">开放注册</span>
-            <div class="s-control">
-              <el-switch v-model="form.registerEnabled" />
+      <!-- ========== 存储 ========== -->
+      <div v-show="activeTab === 'storage'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-orange"><el-icon><Box /></el-icon></div>
+            <div class="card-titles">
+              <h3>上传与存储</h3>
+              <p>分片大小、单文件上限</p>
             </div>
           </div>
-          <div class="s-row">
-            <span class="s-label">密码最小长度</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.minPasswordLen"
-                :min="4"
-                :max="32"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
+          <div class="settings-rows">
+            <div class="s-row">
+              <span class="s-label">上传分片大小</span>
+              <div class="s-control">
+                <el-input-number v-model="form.uploadChunkSizeMB" :min="1" :max="100" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">MB</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">最大文件大小</span>
+              <div class="s-control">
+                <el-input-number v-model="form.maxFileSizeGB" :min="0" :max="1000" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">GB · 0 = 不限制</span>
+              </div>
             </div>
           </div>
-          <div class="s-row">
-            <span class="s-label">会话有效期</span>
-            <div class="s-control">
-              <el-select v-model="form.sessionTimeoutHours" size="small">
-                <el-option :value="24" label="1 天" />
-                <el-option :value="72" label="3 天" />
-                <el-option :value="168" label="7 天" />
-                <el-option :value="336" label="14 天" />
-                <el-option :value="720" label="30 天" />
-                <el-option :value="4320" label="180 天" />
-              </el-select>
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label">登录验证码</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.loginCaptchaThreshold"
-                :min="0"
-                :max="10"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">次 · 0 = 关闭</span>
-            </div>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- 上传与存储 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-orange"><el-icon><Upload /></el-icon></div>
-          <div>
-            <h3>上传与存储</h3>
-            <p>分片大小与文件大小限制</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">上传分片大小</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.uploadChunkSizeMB"
-                :min="1"
-                :max="100"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">MB</span>
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-purple"><el-icon><Share /></el-icon></div>
+            <div class="card-titles">
+              <h3>分享与回收站</h3>
+              <p>分享有效期与回收站保留策略</p>
             </div>
           </div>
-          <div class="s-row">
-            <span class="s-label">单文件大小上限</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.maxFileSizeGB"
-                :min="0"
-                :max="1024"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">GB · 0 = 不限制</span>
+          <div class="settings-rows">
+            <div class="s-row">
+              <span class="s-label">分享默认有效期</span>
+              <div class="s-control">
+                <el-select v-model="form.shareDefaultExpireDays" size="small">
+                  <el-option :value="0" label="永久" />
+                  <el-option :value="1" label="1 天" />
+                  <el-option :value="7" label="7 天" />
+                  <el-option :value="15" label="15 天" />
+                  <el-option :value="30" label="30 天" />
+                  <el-option :value="90" label="90 天" />
+                </el-select>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">回收站保留天数</span>
+              <div class="s-control">
+                <el-input-number v-model="form.recycleRetentionDays" :min="0" :max="365" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">天 · 0 = 不自动清理</span>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
-      <!-- 注册与安全 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-green"><el-icon><Lock /></el-icon></div>
-          <div>
-            <h3>注册与安全</h3>
-            <p>注册开关与账号安全策略</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">开放注册</span>
-            <div class="s-control">
-              <el-switch v-model="form.registerEnabled" />
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label">密码最小长度</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.minPasswordLen"
-                :min="4"
-                :max="32"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label">会话有效期</span>
-            <div class="s-control">
-              <el-select v-model="form.sessionTimeoutHours" size="small">
-                <el-option :value="24" label="1 天" />
-                <el-option :value="72" label="3 天" />
-                <el-option :value="168" label="7 天" />
-                <el-option :value="336" label="14 天" />
-                <el-option :value="720" label="30 天" />
-                <el-option :value="4320" label="180 天" />
-              </el-select>
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label">登录验证码</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.loginCaptchaThreshold"
-                :min="0"
-                :max="10"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">次 · 0 = 关闭</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 上传与存储 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-orange"><el-icon><Upload /></el-icon></div>
-          <div>
-            <h3>上传与存储</h3>
-            <p>分片大小与文件大小限制</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">上传分片大小</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.uploadChunkSizeMB"
-                :min="1"
-                :max="100"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">MB</span>
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label">单文件大小上限</span>
-            <div class="s-control">
-              <el-input-number
-                v-model="form.maxFileSizeGB"
-                :min="0"
-                :max="1024"
-                :step="1"
-                size="small"
-                controls-position="right"
-              />
-              <span class="s-hint">GB · 0 = 不限制</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 分享管理 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-teal"><el-icon><Share /></el-icon></div>
-          <div>
-            <h3>分享管理</h3>
-            <p>新建分享的默认有效期</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">默认分享有效期</span>
-            <div class="s-control">
-              <el-select v-model="form.shareDefaultExpireDays" size="small">
-                <el-option :value="0" label="永久（默认）" />
-                <el-option :value="1" label="1 天" />
-                <el-option :value="7" label="7 天" />
-                <el-option :value="30" label="30 天" />
-                <el-option :value="90" label="90 天" />
-              </el-select>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 回收站 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-red"><el-icon><Delete /></el-icon></div>
-          <div>
-            <h3>回收站</h3>
-            <p>自动清理超期文件，节省空间</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">自动清理保留期</span>
-            <div class="s-control">
-              <el-select v-model="form.recycleRetentionDays" size="small">
-                <el-option :value="0" label="关闭（仅手动）" />
-                <el-option :value="3" label="3 天" />
-                <el-option :value="7" label="7 天" />
-                <el-option :value="15" label="15 天" />
-                <el-option :value="30" label="30 天" />
-                <el-option :value="90" label="90 天" />
-              </el-select>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 主题色（独占整行） -->
-      <section class="panel glass-card span2 brand-color-card">
-        <div class="brand-color-layout">
-          <div class="brand-color-info">
-            <div class="panel-icon pi-purple"><el-icon><Brush /></el-icon></div>
-            <div class="brand-color-text">
+      <!-- ========== 外观 ========== -->
+      <div v-show="activeTab === 'appearance'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-purple"><el-icon><Brush /></el-icon></div>
+            <div class="card-titles">
               <h3>主题色</h3>
               <p>品牌主色，应用于全站强调色</p>
             </div>
           </div>
-          <div class="brand-color-picker">
+          <div class="brand-color-row">
             <div class="preset-colors">
               <button
                 v-for="c in presetColors"
@@ -714,224 +575,205 @@ onMounted(load);
                 @click="form.brandColor = c"
               />
             </div>
-            <button class="color-reset" v-if="form.brandColor" @click="form.brandColor = ''" title="恢复默认">
-              <el-icon><Close /></el-icon>
-            </button>
-            <el-color-picker v-model="form.brandColor" class="custom-picker" title="自定义颜色" />
+            <div class="brand-color-actions">
+              <button class="color-reset" v-if="form.brandColor" @click="form.brandColor = ''" title="恢复默认">
+                <el-icon><Close /></el-icon>
+              </button>
+              <el-color-picker v-model="form.brandColor" title="自定义颜色" />
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- 主题风格（独占整行） -->
-      <section class="panel glass-card span2">
-        <div class="panel-head">
-          <div class="panel-icon pi-green"><el-icon><Brush /></el-icon></div>
-          <div>
-            <h3>主题风格</h3>
-            <p>选择全站视觉风格，保存后立即生效</p>
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-green"><el-icon><Brush /></el-icon></div>
+            <div class="card-titles">
+              <h3>主题风格</h3>
+              <p>选择全站视觉风格，保存后立即生效</p>
+            </div>
           </div>
-        </div>
-        <div class="theme-grid">
-          <div
-            v-for="t in themeList"
-            :key="t.value"
-            class="theme-card"
-            :class="{ active: form.theme === t.value }"
-            @click="form.theme = t.value; applyTheme(t.value)"
-          >
-            <div class="theme-preview" :data-theme-preview="t.value"></div>
-            <div class="theme-name">{{ t.label }}</div>
-            <div class="theme-desc">{{ t.desc }}</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 导航栏自定义（独占整行） -->
-      <section class="panel glass-card span2">
-        <div class="panel-head">
-          <div class="panel-icon pi-orange"><el-icon><Rank /></el-icon></div>
-          <div>
-            <h3>导航栏自定义</h3>
-            <p>拖拽菜单项调整显示顺序，自动保存</p>
-          </div>
-        </div>
-        <div class="nav-customize-container">
-          <div class="nav-customize-tabs">
-            <button
-              class="nav-tab"
-              :class="{ active: navTab === 'main' }"
-              @click="navTab = 'main'"
-            >主菜单</button>
-            <button
-              class="nav-tab"
-              :class="{ active: navTab === 'admin' }"
-              @click="navTab = 'admin'"
-            >系统管理</button>
-          </div>
-          <div class="nav-customize-list">
+          <div class="theme-grid">
             <div
-              v-for="item in currentNavItems"
-              :key="item.path"
-              class="nav-customize-item"
-              :class="{ 
-                dragging: navMouseDragPath === item.path, 
-                'drop-target': navDropTarget === item.path && navMouseDragPath !== item.path 
-              }"
-              @mousedown="onNavMouseDown(item.path, $event)"
-              @mousemove="onNavMouseMove(item.path, $event)"
-              @mouseup="onNavMouseUp(item.path)"
+              v-for="t in themeList"
+              :key="t.value"
+              class="theme-card"
+              :class="{ active: form.theme === t.value }"
+              @click="form.theme = t.value; applyTheme(t.value)"
             >
-              <el-icon class="nav-drag-icon"><Rank /></el-icon>
-              <el-icon class="nav-menu-icon"><component :is="item.icon" /></el-icon>
-              <span class="nav-menu-label">{{ item.label }}</span>
+              <div class="theme-preview" :data-theme-preview="t.value"></div>
+              <div class="theme-name">{{ t.label }}</div>
+              <div class="theme-desc">{{ t.desc }}</div>
             </div>
           </div>
-          <div class="nav-customize-hint">
-            <el-icon><InfoFilled /></el-icon>
-            <span>按住菜单项拖动到目标位置，松手后自动保存</span>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- 在线更新 -->
-      <section class="panel glass-card">
-        <div class="panel-head">
-          <div class="panel-icon pi-purple"><el-icon><Refresh /></el-icon></div>
-          <div>
-            <h3>在线更新</h3>
-            <p>从 GitHub 检查最新版本</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">当前版本</span>
-            <div class="s-control">
-              <span class="row-value">{{ updateInfo?.currentVersion || '加载中...' }}</span>
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-cyan"><el-icon><Picture /></el-icon></div>
+            <div class="card-titles">
+              <h3>自定义背景</h3>
+              <p>全站页面背景，支持图片 / 渐变 / 纯色，保存后对所有用户生效</p>
             </div>
           </div>
-          <div class="s-row">
-            <span class="s-label">最新版本</span>
-            <div class="s-control">
-              <span class="row-value" :class="{ 'update-available': updateInfo?.isUpdateAvailable }">
-                {{ updateInfo?.latestVersion || '检查中...' }}
-                <el-tag v-if="updateInfo?.isUpdateAvailable" type="warning" size="small">有新版本</el-tag>
-              </span>
-            </div>
-          </div>
-          <div class="s-row">
-            <span class="s-label"></span>
-            <div class="s-control">
-              <el-button size="small" :loading="updateChecking" @click="checkUpdate">
-                <el-icon><Refresh /></el-icon>&nbsp;检查更新
-              </el-button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 自定义背景 -->
-      <section class="panel glass-card span2">
-        <div class="panel-head">
-          <div class="panel-icon pi-cyan"><el-icon><Picture /></el-icon></div>
-          <div>
-            <h3>自定义背景</h3>
-            <p>全站页面背景，支持图片 / 渐变 / 纯色，保存后对所有用户生效</p>
-          </div>
-        </div>
-        <div class="settings-rows">
-          <div class="s-row">
-            <span class="s-label">背景类型</span>
-            <div class="s-control">
-              <el-select v-model="form.bgType" size="small">
-                <el-option value="theme" label="跟随主题（默认）" />
-                <el-option value="image" label="图片" />
-                <el-option value="gradient" label="渐变" />
-                <el-option value="color" label="纯色" />
-              </el-select>
-            </div>
-          </div>
-
-          <!-- 图片模式 -->
-          <template v-if="form.bgType === 'image'">
+          <div class="settings-rows">
             <div class="s-row">
-              <span class="s-label">上传背景图</span>
+              <span class="s-label">背景类型</span>
               <div class="s-control">
-                <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="bg-file-input" @change="onBgFile" />
-                <el-button :loading="bgUploading" size="small" @click="document.querySelector('.bg-file-input')?.click()">选择图片</el-button>
+                <el-select v-model="form.bgType" size="small">
+                  <el-option value="theme" label="跟随主题（默认）" />
+                  <el-option value="image" label="图片" />
+                  <el-option value="gradient" label="渐变" />
+                  <el-option value="color" label="纯色" />
+                </el-select>
               </div>
             </div>
-            <div class="s-row">
-              <span class="s-label">图片地址</span>
-              <div class="s-control">
-                <el-input v-model="form.bgImage" placeholder="http(s) 外链，或 /uploads/background/..." />
+
+            <!-- 图片模式 -->
+            <template v-if="form.bgType === 'image'">
+              <div class="s-row">
+                <span class="s-label">上传背景图</span>
+                <div class="s-control">
+                  <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="bg-file-input" @change="onBgFile" />
+                  <el-button :loading="bgUploading" size="small" @click="document.querySelector('.bg-file-input')?.click()">选择图片</el-button>
+                </div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">图片地址</span>
+                <div class="s-control">
+                  <el-input v-model="form.bgImage" placeholder="http(s) 外链，或 /uploads/background/..." />
+                </div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">实时预览</span>
+                <div class="s-control">
+                  <div class="bg-preview-wrap">
+                    <img v-if="form.bgImage" :src="form.bgImage" class="bg-preview" />
+                    <div v-else class="bg-preview-empty">选择或填写背景图后显示预览</div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 渐变模式 -->
+            <template v-if="form.bgType === 'gradient'">
+              <div class="s-row">
+                <span class="s-label">起始色</span>
+                <div class="s-control"><el-color-picker v-model="form.bgGradientFrom" /></div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">结束色</span>
+                <div class="s-control"><el-color-picker v-model="form.bgGradientTo" /></div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">渐变角度</span>
+                <div class="s-control"><el-slider v-model="form.bgGradientAngle" :min="0" :max="360" :step="5" class="bg-slider" /></div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">实时预览</span>
+                <div class="s-control">
+                  <div class="bg-preview-wrap">
+                    <div class="bg-preview" :style="{ background: `linear-gradient(${form.bgGradientAngle}deg, ${form.bgGradientFrom} 0%, ${form.bgGradientTo} 100%)` }" />
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 纯色模式 -->
+            <template v-if="form.bgType === 'color'">
+              <div class="s-row">
+                <span class="s-label">背景色</span>
+                <div class="s-control"><el-color-picker v-model="form.bgColor" /></div>
+              </div>
+            </template>
+
+            <!-- 遮罩强度（所有自定义类型通用） -->
+            <div class="s-row" v-if="form.bgType !== 'theme'">
+              <span class="s-label">遮罩强度</span>
+              <div class="s-control"><el-slider v-model="form.bgOverlay" :min="0" :max="100" :step="5" class="bg-slider" /></div>
+            </div>
+            <div class="s-row" v-if="form.bgType !== 'theme'">
+              <span class="s-label"></span>
+              <div class="s-control"><el-button link size="small" @click="resetBg">恢复默认</el-button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ========== 导航 ========== -->
+      <div v-show="activeTab === 'nav'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-orange"><el-icon><Rank /></el-icon></div>
+            <div class="card-titles">
+              <h3>导航栏自定义</h3>
+              <p>拖拽菜单项调整显示顺序，自动保存</p>
+            </div>
+          </div>
+          <div class="nav-customize-container">
+            <div class="nav-customize-tabs">
+              <button class="nav-tab" :class="{ active: navTab === 'main' }" @click="navTab = 'main'">主菜单</button>
+              <button class="nav-tab" :class="{ active: navTab === 'admin' }" @click="navTab = 'admin'">系统管理</button>
+            </div>
+            <div class="nav-customize-list">
+              <div
+                v-for="item in currentNavItems"
+                :key="item.path"
+                class="nav-customize-item"
+                :class="{
+                  dragging: navMouseDragPath === item.path,
+                  'drop-target': navDropTarget === item.path && navMouseDragPath !== item.path
+                }"
+                @mousedown="onNavMouseDown(item.path, $event)"
+                @mousemove="onNavMouseMove(item.path, $event)"
+                @mouseup="onNavMouseUp(item.path)"
+              >
+                <el-icon class="nav-drag-icon"><Rank /></el-icon>
+                <el-icon class="nav-menu-icon"><component :is="item.icon" /></el-icon>
+                <span class="nav-menu-label">{{ item.label }}</span>
               </div>
             </div>
-            <div class="s-row">
-              <span class="s-label">实时预览</span>
-              <div class="s-control">
-                <div class="bg-preview-wrap">
-                  <img v-if="form.bgImage" :src="form.bgImage" class="bg-preview" />
-                  <div v-else class="bg-preview-empty">选择或填写背景图后显示预览</div>
+            <div class="nav-customize-hint">
+              <el-icon><InfoFilled /></el-icon>
+              <span>按住菜单项拖动到目标位置，松手后自动保存</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ========== 更新 ========== -->
+      <div v-show="activeTab === 'update'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-purple"><el-icon><Refresh /></el-icon></div>
+            <div class="card-titles">
+              <h3>在线更新</h3>
+              <p>从 GitHub 检查最新版本</p>
+            </div>
+          </div>
+          <div class="update-box">
+            <div class="settings-rows">
+              <div class="s-row">
+                <span class="s-label">当前版本</span>
+                <div class="s-control">
+                  <span class="row-value">{{ updateInfo?.currentVersion || '加载中...' }}</span>
+                </div>
+              </div>
+              <div class="s-row">
+                <span class="s-label">最新版本</span>
+                <div class="s-control">
+                  <span class="row-value" :class="{ 'update-available': updateInfo?.isUpdateAvailable }">
+                    {{ updateInfo?.latestVersion || '检查中...' }}
+                    <el-tag v-if="updateInfo?.isUpdateAvailable" type="warning" size="small">有新版本</el-tag>
+                  </span>
                 </div>
               </div>
             </div>
-          </template>
-
-          <!-- 渐变模式 -->
-          <template v-if="form.bgType === 'gradient'">
-            <div class="s-row">
-              <span class="s-label">起始色</span>
-              <div class="s-control">
-                <el-color-picker v-model="form.bgGradientFrom" />
-              </div>
-            </div>
-            <div class="s-row">
-              <span class="s-label">结束色</span>
-              <div class="s-control">
-                <el-color-picker v-model="form.bgGradientTo" />
-              </div>
-            </div>
-            <div class="s-row">
-              <span class="s-label">渐变角度</span>
-              <div class="s-control">
-                <el-slider v-model="form.bgGradientAngle" :min="0" :max="360" :step="5" class="bg-slider" />
-              </div>
-            </div>
-            <div class="s-row">
-              <span class="s-label">实时预览</span>
-              <div class="s-control">
-                <div class="bg-preview-wrap">
-                  <div class="bg-preview" :style="{ background: `linear-gradient(${form.bgGradientAngle}deg, ${form.bgGradientFrom} 0%, ${form.bgGradientTo} 100%)` }" />
-                </div>
-              </div>
-            </div>
-          </template>
-
-          <!-- 纯色模式 -->
-          <template v-if="form.bgType === 'color'">
-            <div class="s-row">
-              <span class="s-label">背景色</span>
-              <div class="s-control">
-                <el-color-picker v-model="form.bgColor" />
-              </div>
-            </div>
-          </template>
-
-          <!-- 遮罩强度（所有自定义类型通用） -->
-          <div class="s-row" v-if="form.bgType !== 'theme'">
-            <span class="s-label">遮罩强度</span>
-            <div class="s-control">
-              <el-slider v-model="form.bgOverlay" :min="0" :max="100" :step="5" class="bg-slider" />
-            </div>
+            <el-button :loading="updateChecking" @click="checkUpdate">
+              <el-icon><Refresh /></el-icon>&nbsp;检查更新
+            </el-button>
           </div>
-          <div class="s-row" v-if="form.bgType !== 'theme'">
-            <span class="s-label"></span>
-            <div class="s-control">
-              <el-button link size="small" @click="resetBg">恢复默认</el-button>
-            </div>
-          </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
 
     <!-- 保存栏 -->
@@ -948,89 +790,132 @@ onMounted(load);
 .settings-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-}
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  align-items: stretch;
-}
-.span2 {
-  grid-column: span 2;
+  gap: 18px;
 }
 
-/* ---------- 面板 ---------- */
-.panel {
-  border-radius: 18px;
-  padding: 20px;
+/* ---------- 页头 ---------- */
+.settings-header {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: 4px;
 }
-.panel:hover {
-  transform: none; /* 大卡片不缩放，避免压到相邻面板 */
+.settings-header h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
 }
-.panel-head {
+.settings-header p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---------- 选项卡 ---------- */
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px);
+  overflow-x: auto;
+}
+.tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.tab-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.tab-btn .el-icon {
+  font-size: 16px;
+}
+
+/* ---------- 内容区 ---------- */
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---------- 卡片 ---------- */
+.card {
+  border-radius: 18px;
+  padding: 22px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+}
+.card-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 20px;
 }
-.panel-head h3 {
+.card-titles h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text);
 }
-.panel-head p {
-  margin: 2px 0 0;
-  font-size: 12px;
+.card-titles p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
   color: var(--text-secondary);
 }
-.panel-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
+.card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
-  font-size: 19px;
+  font-size: 20px;
   color: #fff;
   flex-shrink: 0;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
-.pi-blue {
-  background: linear-gradient(135deg, #5b8cff, #7c6ff0);
-}
-.pi-green {
-  background: linear-gradient(135deg, #2ea24f, #6fcf9a);
-}
-.pi-orange {
-  background: linear-gradient(135deg, #e8933a, #f0b35c);
-}
-.pi-teal {
-  background: linear-gradient(135deg, #2aa8a8, #4fc9c9);
-}
-.pi-red {
-  background: linear-gradient(135deg, #e5484d, #f08a8e);
-}
-.pi-purple {
-  background: linear-gradient(135deg, #9a6fe8, #c59af5);
-}
-.pi-cyan {
-  background: linear-gradient(135deg, #2aa8d8, #6fd0e8);
-}
+.ci-blue { background: linear-gradient(135deg, #5b8cff, #7c6ff0); }
+.ci-green { background: linear-gradient(135deg, #2ea24f, #6fcf9a); }
+.ci-orange { background: linear-gradient(135deg, #e8933a, #f0b35c); }
+.ci-purple { background: linear-gradient(135deg, #8b5cf6, #c084fc); }
+.ci-cyan { background: linear-gradient(135deg, #06b6d4, #4dd8e8); }
 
-/* ---------- 基本信息：双列表单 ---------- */
-.fields {
+/* ---------- 字段网格（通用） ---------- */
+.fields-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px 18px;
+  gap: 18px;
 }
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .field.span2 {
   grid-column: span 2;
@@ -1040,457 +925,252 @@ onMounted(load);
   font-weight: 500;
   color: var(--text);
 }
+
+/* ---------- Logo ---------- */
 .logo-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 .logo-upload-box {
-  width: 64px;
+  width: 96px;
   height: 64px;
   border-radius: 12px;
   border: 1.5px dashed var(--glass-border);
-  background: var(--surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
   cursor: pointer;
   overflow: hidden;
+  transition: all 0.2s ease;
   flex-shrink: 0;
-  transition: border-color 0.2s;
 }
 .logo-upload-box:hover {
   border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.logo-preview {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 .logo-placeholder {
   font-size: 12px;
-  color: var(--text-dim);
-}
-.logo-preview {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  color: var(--text-secondary);
 }
 .logo-actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .logo-file-input {
   display: none;
 }
 
-/* ---------- 其他面板：行式 ---------- */
-.rows {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.row-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-.row-end {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.unit {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-.num {
-  width: 130px;
-}
-.sel {
-  width: 170px;
-}
-
-/* ---------- 新行式布局（注册与安全等） ---------- */
+/* ---------- 设置行 ---------- */
 .settings-rows {
   display: flex;
   flex-direction: column;
-  gap: 16px;
 }
 .s-row {
-  display: grid;
-  grid-template-columns: 120px 1fr;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.s-row:last-child {
+  border-bottom: none;
 }
 .s-label {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
   color: var(--text);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 500;
+  flex-shrink: 0;
 }
 .s-control {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
-  min-width: 0;
-}
-.s-control .el-input-number {
-  width: 150px;
-  flex-shrink: 0;
-}
-.s-control .el-select {
-  width: 150px;
-  flex-shrink: 0;
-}
-.s-control .el-switch {
-  flex-shrink: 0;
 }
 .s-hint {
   font-size: 12px;
   color: var(--text-secondary);
-  white-space: nowrap;
 }
-.s-control .row-value {
-  font-size: 13px;
-  color: var(--text);
-}
-
-/* ---------- 品牌色卡片 ---------- */
-.brand-color-card {
-  padding: 16px;
-}
-.brand-color-layout {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-.brand-color-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 50%;
-}
-.brand-color-info .panel-icon {
-  flex-shrink: 0;
-}
-.brand-color-text h3 {
-  margin: 0;
-  font-size: 15px;
+.row-value {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
-}
-.brand-color-text p {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.brand-color-picker {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-shrink: 0;
-}
-.preset-colors {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
 }
+.update-available {
+  color: #f59e0b;
+}
+
+/* ---------- 品牌色 ---------- */
+.brand-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.preset-colors {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .color-swatch {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15), inset 0 1px 2px rgba(255,255,255,0.2);
-  backdrop-filter: blur(4px);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.3);
 }
 .color-swatch:hover {
-  transform: scale(1.15);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.25), inset 0 1px 2px rgba(255,255,255,0.3);
+  transform: scale(1.12);
 }
 .color-swatch.active {
   border-color: #fff;
-  box-shadow: 0 0 0 3px var(--accent-soft), 0 4px 16px rgba(0,0,0,0.3);
-  transform: scale(1.1);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.color-reset {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-.color-reset:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-.custom-picker {
-  width: 28px;
-  height: 28px;
-}
-.custom-picker .el-color-picker__color {
-  border-radius: 50%;
-}
-
-/* ---------- 自定义背景 ---------- */
-.bg-file-input {
-  display: none;
-}
-.bg-preview-wrap {
-  flex: 1;
-  display: flex;
-  justify-content: flex-end;
-}
-.bg-preview {
-  width: 220px;
-  height: 120px;
-  border-radius: 12px;
-  object-fit: cover;
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow);
-  flex-shrink: 0;
-}
-.bg-preview-empty {
-  width: 220px;
-  height: 120px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--surface);
-  border: 1px dashed var(--glass-border);
-}
-.bg-slider {
-  flex: 1;
-  max-width: 320px;
-}
-
-/* ---------- 保存栏 ---------- */
-.save-bar {
-  border-radius: 18px;
-  padding: 14px 20px;
+.brand-color-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
 }
-.save-bar:hover {
-  transform: none;
-}
-.save-hint {
-  font-size: 12px;
+.color-reset {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all 0.2s ease;
+}
+.color-reset:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text);
 }
 
-@media (max-width: 900px) {
-  .settings-grid {
-    grid-template-columns: 1fr;
-  }
-  .span2 {
-    grid-column: span 1;
-  }
-  .fields {
-    grid-template-columns: 1fr;
-  }
-  .field.span2 {
-    grid-column: span 1;
-  }
-}
-
-/* 主题选择器 */
+/* ---------- 主题风格 ---------- */
 .theme-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  padding: 16px 0;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
 }
 .theme-card {
-  cursor: pointer;
   border-radius: 14px;
-  overflow: hidden;
-  border: 2px solid var(--glass-border);
-  transition: all 0.2s;
-  background: var(--glass-bg);
+  border: 1.5px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 .theme-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--shadow-hover);
+  border-color: var(--accent);
+  transform: translateY(-2px);
 }
 .theme-card.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .theme-preview {
-  height: 100px;
-  display: flex;
-  align-items: flex-end;
-  padding: 10px;
-  gap: 6px;
-}
-.theme-preview::before,
-.theme-preview::after {
-  content: '';
-  width: 30px;
-  height: 20px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-}
-.theme-preview::after {
-  width: 20px;
-  height: 30px;
-}
-[data-theme-preview='light-glass'] {
-  background: linear-gradient(135deg, #9fc2ff, #cdb4ef, #f2b6d6);
-}
-[data-theme-preview='dark-glass'] {
-  background: linear-gradient(135deg, #080c18, #151c34, #2b1d45);
-}
-[data-theme-preview='minimal'] {
-  background: #f5f6f8;
-}
-[data-theme-preview='silver'] {
-  background: linear-gradient(135deg, #e3e9f1, #b9c4d4, #7e8ea3);
-}
-[data-theme-preview='cyberpunk'] {
-  background: #0a0a0f;
-}
-[data-theme-preview='cyberpunk']::before,
-[data-theme-preview='cyberpunk']::after {
-  background: rgba(0, 255, 200, 0.2);
-  border-color: rgba(0, 255, 200, 0.4);
-}
-[data-theme-preview='retro'] {
-  background: linear-gradient(135deg, #f5e6d3, #e8d4b8, #d4b896);
-}
-[data-theme-preview='retro']::before,
-[data-theme-preview='retro']::after {
-  background: rgba(139, 108, 76, 0.2);
-  border-color: rgba(139, 108, 76, 0.3);
-}
-[data-theme-preview='forest'] {
-  background: linear-gradient(135deg, #2d5a3f, #4a7c59, #6b9e78);
-}
-[data-theme-preview='forest']::before,
-[data-theme-preview='forest']::after {
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-[data-theme-preview='neumorphic'] {
-  background: #e0e5ec;
-}
-[data-theme-preview='neumorphic']::before,
-[data-theme-preview='neumorphic']::after {
-  background: #e0e5ec;
-  border: none;
-  box-shadow: 3px 3px 6px rgba(166, 178, 199, 0.5), -3px -3px 6px rgba(255, 255, 255, 0.8);
-}
-[data-theme-preview='swiss'] {
-  background: #fff;
-}
-[data-theme-preview='swiss']::before,
-[data-theme-preview='swiss']::after {
-  background: #fff;
-  border: 2px solid #000;
+  height: 72px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  position: relative;
+  overflow: hidden;
 }
 .theme-name {
-  padding: 10px 12px 4px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
+  text-align: center;
 }
 .theme-desc {
-  padding: 0 12px 12px;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-secondary);
+  text-align: center;
+  margin-top: 3px;
+  line-height: 1.4;
 }
 
-/* ---------- 导航栏自定义 ---------- */
+/* ---------- 导航自定义 ---------- */
 .nav-customize-container {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .nav-customize-tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
 }
 .nav-tab {
-  padding: 8px 16px;
-  border-radius: 8px;
+  padding: 8px 20px;
+  border-radius: 10px;
   border: 1px solid var(--glass-border);
   background: transparent;
   color: var(--text-secondary);
+  font-size: 13.5px;
   cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-.nav-tab:hover {
-  background: var(--accent-soft);
+  transition: all 0.2s ease;
 }
 .nav-tab.active {
   background: var(--accent);
-  color: #fff;
   border-color: var(--accent);
+  color: #fff;
 }
 .nav-customize-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  max-height: 240px;
-  overflow-y: auto;
+  max-width: 480px;
 }
 .nav-customize-item {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  border: 1.5px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
   cursor: grab;
-  transition: all 0.2s;
+  user-select: none;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .nav-customize-item:active {
   cursor: grabbing;
 }
-.nav-customize-item:hover {
-  border-color: var(--accent);
-  box-shadow: 0 2px 8px var(--shadow);
-}
 .nav-customize-item.dragging {
   opacity: 0.5;
-  transform: scale(0.98);
-}
-.nav-customize-item.drag-over {
+  transform: scale(1.02);
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+.nav-customize-item.drop-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: translateY(-2px);
 }
 .nav-drag-icon {
   color: var(--text-secondary);
-  font-size: 16px;
-  cursor: grab;
+  font-size: 15px;
 }
 .nav-menu-icon {
   color: var(--accent);
-  font-size: 18px;
+  font-size: 17px;
 }
 .nav-menu-label {
   flex: 1;
@@ -1501,29 +1181,87 @@ onMounted(load);
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 16px;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--accent-soft);
   color: var(--text-secondary);
   font-size: 13px;
+  max-width: 480px;
 }
 
-/* 拖拽项动画 */
-.nav-customize-item {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  user-select: none;
+/* ---------- 背景预览 ---------- */
+.bg-file-input {
+  display: none;
 }
-.nav-customize-item.dragging {
-  opacity: 0.5;
-  transform: scale(1.02);
-  border-color: var(--accent);
-  box-shadow: 0 4px 16px var(--shadow);
-  z-index: 10;
+.bg-preview-wrap {
+  width: 100%;
+  max-width: 320px;
 }
-.nav-customize-item.drop-target {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-  transform: translateY(-3px);
+.bg-preview {
+  width: 100%;
+  height: 120px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.1);
+}
+.bg-preview-empty {
+  height: 120px;
+  border-radius: 12px;
+  border: 1.5px dashed var(--glass-border);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.bg-slider {
+  width: 200px;
+}
+
+/* ---------- 更新 ---------- */
+.update-box {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 480px;
+}
+
+/* ---------- 保存栏 ---------- */
+.save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 22px;
+  border-radius: 16px;
+  position: sticky;
+  bottom: 12px;
+}
+.save-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 720px) {
+  .fields-grid {
+    grid-template-columns: 1fr;
+  }
+  .field.span2 {
+    grid-column: span 1;
+  }
+  .save-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .save-bar .el-button {
+    width: 100%;
+  }
+  .nav-customize-list,
+  .nav-customize-hint,
+  .update-box,
+  .bg-preview-wrap {
+    max-width: 100%;
+  }
 }
 </style>
