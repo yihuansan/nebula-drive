@@ -4,6 +4,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync, spawn } from 'node:child_process';
 
+// 获取 GitHub Token（优先环境变量，其次 data/.github-token 文件）
+function getGithubToken(): string {
+  const envToken = process.env.GITHUB_TOKEN;
+  if (envToken) return envToken;
+  try {
+    const tokenFile = path.join(process.cwd(), 'data', '.github-token');
+    if (fs.existsSync(tokenFile)) {
+      const t = fs.readFileSync(tokenFile, 'utf-8').trim();
+      if (t) return t;
+    }
+  } catch { /* ignore */ }
+  return '';
+}
+
 // 从 package.json 读取当前版本
 function getCurrentVersion(): string {
   try {
@@ -46,12 +60,15 @@ export async function updateRoutes(app: FastifyInstance) {
     }
     
     try {
-      // 从 GitHub API 获取最新 release
+      // 从 GitHub API 获取最新 release（使用 Token 认证，避免 60/h 限流）
+      const token = getGithubToken();
+      const headers: Record<string, string> = {
+        'User-Agent': 'NebulaDrive',
+        'Accept': 'application/vnd.github.v3+json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
-        headers: {
-          'User-Agent': 'NebulaDrive',
-          'Accept': 'application/vnd.github.v3+json',
-        },
+        headers,
       });
       
       // 404 = 还没有创建任何 release
