@@ -587,6 +587,42 @@ body {
 .el-button {
   border-radius: 10px;
 }
+
+/* ---------- 深色玻璃模式：按钮可见性（默认/link 按钮文字在深色下可读） ---------- */
+/* 默认按钮（无彩色 type、非 link）：玻璃质感 + 浅色文字 */
+[data-theme='dark-glass'] .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger):not(.is-link) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--glass-border);
+  color: var(--text);
+}
+[data-theme='dark-glass'] .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger):not(.is-link):hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: var(--glass-border);
+  color: var(--text);
+}
+/* link 按钮（默认类型）：深色下文字可见，hover 变主题色 */
+[data-theme='dark-glass'] .el-button.is-link:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger) {
+  color: var(--text);
+}
+[data-theme='dark-glass'] .el-button.is-link:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger):hover {
+  color: var(--accent);
+}
+/* 主色按钮（实心）：跟随主题 accent，白字 */
+[data-theme='dark-glass'] .el-button--primary:not(.is-link) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+[data-theme='dark-glass'] .el-button--primary:not(.is-link):hover {
+  background: color-mix(in srgb, var(--accent) 85%, #fff);
+  border-color: color-mix(in srgb, var(--accent) 85%, #fff);
+  color: #fff;
+}
+/* link 主色按钮：主题色文字 */
+[data-theme='dark-glass'] .el-button--primary.is-link {
+  color: var(--accent);
+}
+
 .el-tag {
   border-radius: 8px;
 }
