@@ -62,4 +62,27 @@ export async function settingsRoutes(app: FastifyInstance) {
       return fail(reply, 400, e?.message || '背景上传失败');
     }
   });
+
+  /** 上传 Logo 到 data/logo/，返回可公开访问的 URL */
+  app.post('/settings/logo', { preHandler: requirePermission('settings:manage') }, async (req, reply) => {
+    try {
+      const r = await readUpload(req);
+      if (!r) return fail(reply, 400, '缺少文件');
+      const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+      const ext = BG_MIME[mime] || path.extname(r.filename).replace('.', '').toLowerCase() || 'png';
+      if (!BG_MIME[mime] && !['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'].includes(ext)) {
+        return fail(reply, 400, '仅支持 jpg/png/webp/gif/svg Logo');
+      }
+      // Logo 限制 2MB
+      if (r.data.length > 2 * 1024 * 1024) {
+        return fail(reply, 400, 'Logo 图片不能超过 2MB');
+      }
+      const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+      fs.writeFileSync(path.join(dirs.logo, name), r.data);
+      const url = `/uploads/logo/${name}`;
+      return ok(reply, { url });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || 'Logo 上传失败');
+    }
+  });
 }

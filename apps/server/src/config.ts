@@ -38,12 +38,13 @@ export const dirs = {
   recycle: path.join(config.dataDir, 'recycle'),
   storageRoot: config.storageRoot,
   backgrounds: path.join(config.dataDir, 'backgrounds'),
+  logo: path.join(config.dataDir, 'logo'),
   jwtSecretFile: path.join(config.dataDir, '.jwt-secret'),
 } as const;
 
 /** 初始化目录结构 */
 export function ensureDirs(): void {
-  for (const d of [dirs.data, dirs.uploads, dirs.recycle, dirs.storageRoot, dirs.backgrounds]) {
+  for (const d of [dirs.data, dirs.uploads, dirs.recycle, dirs.storageRoot, dirs.backgrounds, dirs.logo]) {
     fs.mkdirSync(d, { recursive: true });
   }
 }

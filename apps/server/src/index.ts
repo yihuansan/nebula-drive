@@ -118,6 +118,21 @@ async function buildApp(): Promise<FastifyInstance> {
     return reply.type(bgMime[ext] || 'application/octet-stream').send(fs.createReadStream(file));
   });
 
+  // Logo 服务：/uploads/logo/xxx -> data/logo/xxx
+  const logoMime: Record<string, string> = {
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+    '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+  };
+  app.get('/uploads/logo/:name', (req, reply) => {
+    const name = (req.params as { name: string }).name;
+    const file = path.join(dirs.logo, name);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      return reply.code(404).send({ error: 'Not Found' });
+    }
+    const ext = path.extname(name).toLowerCase();
+    return reply.type(logoMime[ext] || 'application/octet-stream').send(fs.createReadStream(file));
+  });
+
   // 静态托管 Web 前端构建产物（若存在）
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [

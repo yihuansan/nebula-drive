@@ -199,6 +199,7 @@ function applyTheme(theme: string) {
 }
 const saving = ref(false);
 const bgUploading = ref(false);
+const logoUploading = ref(false);
 
 // 更新检查
 const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean } | null>(null);
@@ -343,6 +344,35 @@ function onBgFile(e: Event) {
   input.value = '';
 }
 
+async function uploadLogo(file: File) {
+  logoUploading.value = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const token = localStorage.getItem('nebula_token') || '';
+    const r = await fetch('/api/v1/settings/logo', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token },
+      body: fd,
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    form.value.logo = j.data.url;
+    ElMessage.success('Logo 已上传，记得保存');
+  } catch (e: any) {
+    ElMessage.error(e.message || 'Logo 上传失败');
+  } finally {
+    logoUploading.value = false;
+  }
+}
+
+function onLogoFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) uploadLogo(file);
+  input.value = '';
+}
+
 function resetBg() {
   form.value.bgType = 'theme';
   form.value.bgImage = '';
@@ -374,10 +404,17 @@ onMounted(load);
             <el-input v-model="form.appName" placeholder="显示在登录页与侧边栏的名称" />
           </div>
           <div class="field">
-            <label>Logo URL</label>
+            <label>系统 Logo</label>
             <div class="logo-row">
-              <el-input v-model="form.logo" placeholder="可选，http(s) 图片地址" />
-              <img v-if="form.logo" :src="form.logo" class="logo-preview" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+              <div class="logo-upload-box" @click="document.querySelector('.logo-file-input')?.click()">
+                <img v-if="form.logo" :src="form.logo" class="logo-preview" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+                <span v-else class="logo-placeholder">点击上传</span>
+              </div>
+              <div class="logo-actions">
+                <el-button :loading="logoUploading" size="small" @click="document.querySelector('.logo-file-input')?.click()">选择图片</el-button>
+                <el-button v-if="form.logo" size="small" @click="form.logo = ''">移除</el-button>
+                <input type="file" accept="image/*" class="logo-file-input" hidden @change="onLogoFile" />
+              </div>
             </div>
           </div>
           <div class="field">
@@ -1001,16 +1038,41 @@ onMounted(load);
 .logo-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.logo-upload-box {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  border: 1.5px dashed var(--glass-border);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: border-color 0.2s;
+}
+.logo-upload-box:hover {
+  border-color: var(--accent);
+}
+.logo-placeholder {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 .logo-preview {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-  background: var(--surface);
-  border: 1px solid var(--glass-border);
-  flex-shrink: 0;
+}
+.logo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.logo-file-input {
+  display: none;
 }
 
 /* ---------- 其他面板：行式 ---------- */
