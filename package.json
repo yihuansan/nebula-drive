@@ -1,20 +1,20 @@
 {
-  "name": "nebula-drive",
-  "version": "0.1.8",
-  "private": true,
-  "description": "NebulaDrive 星云网盘 — 对标 ZFile 的自托管网盘系统（服务端 + Web + 同步引擎 + 桌面端 + 移动端）",
-  "scripts": {
-    "dev:server": "pnpm --filter @nebula/server dev",
-    "dev:web": "pnpm --filter @nebula/web dev",
-    "dev:sync": "pnpm --filter @nebula/sync dev",
-    "build": "pnpm -r build",
-    "build:server": "pnpm --filter @nebula/server build",
-    "build:web": "pnpm --filter @nebula/web build",
-    "build:sync": "pnpm --filter @nebula/sync build",
-    "start": "pnpm --filter @nebula/server start",
-    "test": "pnpm -r test"
-  },
-  "engines": {
-    "node": ">=20"
-  }
+    "name":  "nebula-drive",
+    "version":  "0.1.9",
+    "private":  true,
+    "description":  "NebulaDrive 閺勭喍绨純鎴犳磸 閳?鐎佃鐖?ZFile 閻ㄥ嫯鍤滈幍妯碱吀缂冩垹娲忕化鑽ょ埠閿涘牊婀囬崝锛勵伂 + Web + 閸氬本顒炲鏇熸惛 + 濡楀矂娼扮粩?+ 缁夎濮╃粩顖ょ礆",
+    "scripts":  {
+                    "dev:server":  "pnpm --filter @nebula/server dev",
+                    "dev:web":  "pnpm --filter @nebula/web dev",
+                    "dev:sync":  "pnpm --filter @nebula/sync dev",
+                    "build":  "pnpm -r build",
+                    "build:server":  "pnpm --filter @nebula/server build",
+                    "build:web":  "pnpm --filter @nebula/web build",
+                    "build:sync":  "pnpm --filter @nebula/sync build",
+                    "start":  "pnpm --filter @nebula/server start",
+                    "test":  "pnpm -r test"
+                },
+    "engines":  {
+                    "node":  "\u003e=20"
+                }
 }
