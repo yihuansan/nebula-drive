@@ -30,7 +30,8 @@ function getCurrentVersion(): string {
     ];
     for (const p of candidates) {
       if (fs.existsSync(p)) {
-        const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        const raw = fs.readFileSync(p, 'utf-8');
+        const pkg = JSON.parse(raw.replace(/^\uFEFF/, ''));
         if (pkg.version) return pkg.version;
       }
     }
@@ -118,8 +119,17 @@ export async function updateRoutes(app: FastifyInstance) {
    * POST /api/v1/system/perform-update
    */
   app.post('/system/perform-update', { preHandler: requirePermission('settings:view') }, async (_req, reply) => {
+    const log = (msg: string) => {
+      const line = `[UPDATE ${new Date().toISOString()}] ${msg}`;
+      console.log(line);
+      try { fs.appendFileSync(path.join(process.cwd(), 'update_debug.log'), line + '\n'); } catch { /* ignore */ }
+    };
+
     try {
+      log('=== 开始在线更新 ===');
+
       // 1. 获取最新 release 信息
+      log('1. 获取最新版本信息...');
       const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
         headers: {
           'User-Agent': 'NebulaDrive',
@@ -127,131 +137,210 @@ export async function updateRoutes(app: FastifyInstance) {
         },
       });
       if (!res.ok) {
+        log(`ERROR: GitHub API 返回 ${res.status}`);
         return fail(reply, 500, '无法获取最新版本信息');
       }
       const latest = await res.json();
-      
+      log(`最新版本: ${latest.tag_name}`);
+
       // 2. 下载版本包
       const asset = latest.assets?.[0];
       if (!asset) {
+        log('ERROR: 最新版本没有可用的安装包');
         return fail(reply, 500, '最新版本没有可用的安装包');
       }
-      
+
       const tmpDir = path.join(process.cwd(), 'tmp_update');
       fs.mkdirSync(tmpDir, { recursive: true });
       const zipPath = path.join(tmpDir, 'update.zip');
-      
-      // 下载 zip
+
+      log('2. 下载版本包...');
       const zipRes = await fetch(asset.browser_download_url, {
         headers: { 'User-Agent': 'NebulaDrive' },
       });
       if (!zipRes.ok) {
+        log(`ERROR: 下载失败 ${zipRes.status}`);
         return fail(reply, 500, '下载版本包失败');
       }
-      
+
       const buffer = await zipRes.arrayBuffer();
       fs.writeFileSync(zipPath, Buffer.from(buffer));
-      
+      log(`下载完成: ${buffer.byteLength} bytes`);
+
       // 3. 解压
       const extractDir = path.join(tmpDir, 'extracted');
       fs.mkdirSync(extractDir, { recursive: true });
-      
-      // 使用 PowerShell 解压（Windows）
+
+      log('3. 解压版本包...');
       let extractError = '';
       try {
         execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { timeout: 60000 });
       } catch (e: any) {
         extractError = e.message;
-        // 尝试 tar（Linux/Mac）
         try {
           execSync(`tar -xf "${zipPath}" -C "${extractDir}"`, { timeout: 60000 });
         } catch (e2: any) {
           extractError += ' | ' + e2.message;
         }
       }
-      
-      // 调试：列出解压后的内容
+
       const extractedFiles = fs.existsSync(extractDir) ? fs.readdirSync(extractDir) : [];
-      const logMsg = `[UPDATE] Extract dir: ${extractDir}\n[UPDATE] Extracted files: ${extractedFiles}\n[UPDATE] Extract error: ${extractError || 'none'}\n[UPDATE] cwd: ${process.cwd()}`;
-      fs.writeFileSync(path.join(process.cwd(), 'update_debug.log'), logMsg);
-      console.log(logMsg);
-      
-      // 4. 查找版本包目录（支持新格式 server/+web/ 或旧格式 dist/）
+      log(`解压完成: [${extractedFiles.join(', ')}] (error: ${extractError || 'none'})`);
+
+      // 4. 查找版本包目录
       const serverPkgDir = path.join(extractDir, 'server');
       const webPkgDir = path.join(extractDir, 'web');
       const distPkgDir = path.join(extractDir, 'dist');
-      
-      // 新格式：有 server/ 和 web/ 目录
-      if (fs.existsSync(serverPkgDir) && fs.existsSync(webPkgDir)) {
-        // 替换 server dist
-        const serverDist = path.join(process.cwd(), 'dist');
-        if (fs.existsSync(serverDist)) fs.rmSync(serverDist, { recursive: true, force: true });
-        fs.cpSync(serverPkgDir, serverDist, { recursive: true });
-        
-        // 替换 web dist
-        const webDist = path.join(process.cwd(), '..', 'web', 'dist');
-        if (fs.existsSync(webDist)) fs.rmSync(webDist, { recursive: true, force: true });
-        fs.cpSync(webPkgDir, webDist, { recursive: true });
-      } else if (fs.existsSync(distPkgDir)) {
-        // 旧格式：单个 dist/ 目录
-        const serverDist = path.join(process.cwd(), 'dist');
-        if (fs.existsSync(serverDist)) fs.rmSync(serverDist, { recursive: true, force: true });
-        fs.cpSync(distPkgDir, serverDist, { recursive: true });
-        
-        const webDist = path.join(process.cwd(), '..', 'web', 'dist');
-        const webAssets = path.join(distPkgDir, 'assets');
-        if (fs.existsSync(webAssets)) {
-          if (fs.existsSync(webDist)) fs.rmSync(webDist, { recursive: true, force: true });
-          fs.cpSync(webAssets, webDist, { recursive: true });
-        }
-      } else {
+
+      if (!fs.existsSync(serverPkgDir) && !fs.existsSync(distPkgDir)) {
+        log('ERROR: 版本包格式错误');
         return fail(reply, 500, `版本包格式错误：未找到 server/、web/ 或 dist/ 目录。已解压内容: ${extractedFiles.join(', ')}`);
       }
-      
-      // 5. 更新版本号（优先从版本包读取，否则从 latest tag 获取）
-      let newVersion = latest.tag_name?.replace(/^v/, '') || latest.version || '';
-      
-      // 尝试从版本包中的 package.json 读取版本
-      const pkgInPkg = path.join(extractDir, 'server-package.json');
-      if (fs.existsSync(pkgInPkg)) {
-        const pkgData = JSON.parse(fs.readFileSync(pkgInPkg, 'utf-8'));
-        if (pkgData.version) newVersion = pkgData.version;
+
+      // 5. 确定新版本号（直接用 tag_name，不依赖包内 package.json）
+      const newVersion = latest.tag_name?.replace(/^v/, '') || latest.version || '';
+      log(`新版本号: ${newVersion}`);
+
+      // 6. 生成 Node.js 重启脚本（先停服务器 → 替换文件 → 更新版本 → 启动新服务器）
+      const scriptPath = path.join(tmpDir, 'restart.mjs');
+      const serverDist = path.join(process.cwd(), 'dist');
+      const webDist = path.join(process.cwd(), '..', 'web', 'dist');
+      const serverPkgPath = path.join(process.cwd(), 'package.json');
+      const rootPkgPath = path.join(process.cwd(), '..', '..', 'package.json'); // 修复：root 是 ../../package.json
+
+      let script = `
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+
+const logFile = ${JSON.stringify(path.join(process.cwd(), 'update_debug.log'))};
+const log = (msg) => {
+  const line = \`[RESTART \${new Date().toISOString()}] \${msg}\`;
+  console.log(line);
+  try { fs.appendFileSync(logFile, line + '\\n'); } catch {}
+};
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+log('=== 重启脚本开始 ===');
+log('等待 2 秒让 HTTP 响应完成...');
+await sleep(2000);
+
+// 停止当前服务器
+const serverPid = ${process.pid};
+log(\`停止当前服务器 (PID: \${serverPid})...\`);
+try {
+  process.kill(serverPid, 'SIGTERM');
+  log('服务器已停止');
+} catch (e) {
+  log('停止失败: ' + e.message);
+}
+await sleep(1000);
+
+// 替换文件
+log('替换文件...');
+`;
+
+      if (fs.existsSync(serverPkgDir) && fs.existsSync(webPkgDir)) {
+        script += `
+try {
+  fs.rmSync(${JSON.stringify(serverDist)}, { recursive: true, force: true });
+  log('已删除旧 server dist');
+  fs.cpSync(${JSON.stringify(serverPkgDir)}, ${JSON.stringify(serverDist)}, { recursive: true });
+  log('已复制新 server dist');
+  fs.rmSync(${JSON.stringify(webDist)}, { recursive: true, force: true });
+  log('已删除旧 web dist');
+  fs.cpSync(${JSON.stringify(webPkgDir)}, ${JSON.stringify(webDist)}, { recursive: true });
+  log('已复制新 web dist');
+} catch (e) {
+  log('文件替换失败: ' + e.message);
+}
+`;
+      } else {
+        script += `
+try {
+  fs.rmSync(${JSON.stringify(serverDist)}, { recursive: true, force: true });
+  log('已删除旧 dist');
+  fs.cpSync(${JSON.stringify(distPkgDir)}, ${JSON.stringify(serverDist)}, { recursive: true });
+  log('已复制新 dist');
+} catch (e) {
+  log('文件替换失败: ' + e.message);
+}
+`;
       }
-      
+
       if (newVersion) {
-        // 更新 server 的 package.json（process.cwd() 就是 apps/server）
-        const serverPkgPath = path.join(process.cwd(), 'package.json');
-        if (fs.existsSync(serverPkgPath)) {
-          const spkg = JSON.parse(fs.readFileSync(serverPkgPath, 'utf-8'));
-          spkg.version = newVersion;
-          fs.writeFileSync(serverPkgPath, JSON.stringify(spkg, null, 2));
-        }
-        // 更新根目录的 package.json
-        const rootPkgPath = path.join(process.cwd(), '..', 'package.json');
-        if (fs.existsSync(rootPkgPath)) {
-          const rootPkg = JSON.parse(fs.readFileSync(rootPkgPath, 'utf-8'));
-          rootPkg.version = newVersion;
-          fs.writeFileSync(rootPkgPath, JSON.stringify(rootPkg, null, 2));
-        }
+        script += `
+log('更新版本号到 ${newVersion}...');
+const readPkg = (p) => {
+  const raw = fs.readFileSync(p, 'utf-8');
+  return JSON.parse(raw.replace(/^\\uFEFF/, ''));
+};
+try {
+  const pkg = readPkg(${JSON.stringify(serverPkgPath)});
+  pkg.version = '${newVersion}';
+  fs.writeFileSync(${JSON.stringify(serverPkgPath)}, JSON.stringify(pkg, null, 2));
+  log('server package.json 已更新');
+} catch (e) {
+  log('更新 server package.json 失败: ' + e.message);
+}
+try {
+  const pkg = readPkg(${JSON.stringify(rootPkgPath)});
+  pkg.version = '${newVersion}';
+  fs.writeFileSync(${JSON.stringify(rootPkgPath)}, JSON.stringify(pkg, null, 2));
+  log('root package.json 已更新');
+} catch (e) {
+  log('更新 root package.json 失败: ' + e.message);
+}
+`;
       }
-      
-      // 6. 清理临时文件
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      
-      // 6. 延迟重启服务器
-      setTimeout(() => {
-        // 重新 spawn 自己
-        const child = spawn(process.execPath, [process.argv[1]], {
-          cwd: process.cwd(),
-          detached: true,
-          stdio: 'ignore',
-        });
-        child.unref();
-        process.exit(0);
-      }, 2000);
-      
+
+      script += `
+// 启动新服务器
+log('启动新服务器...');
+try {
+  const child = spawn(process.execPath, [${JSON.stringify(path.join(process.cwd(), 'dist', 'index.js'))}], {
+    cwd: ${JSON.stringify(process.cwd())},
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  log('服务器已启动');
+} catch (e) {
+  log('启动服务器失败: ' + e.message);
+}
+
+// 清理临时文件
+log('清理临时文件...');
+try {
+  fs.rmSync(${JSON.stringify(tmpDir)}, { recursive: true, force: true });
+  log('临时文件已清理');
+} catch (e) {
+  log('清理失败: ' + e.message);
+}
+log('=== 重启脚本完成 ===');
+`;
+
+      fs.writeFileSync(scriptPath, script);
+      log(`6. 重启脚本已生成: ${scriptPath}`);
+
+      // 7. 执行重启脚本（用 Node.js 运行，避免 PowerShell 编码问题）
+      log('7. 执行重启脚本...');
+      const child = spawn(process.execPath, [scriptPath], {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+      child.on('error', (err) => {
+        log(`ERROR: spawn failed: ${err.message}`);
+      });
+
+      log('=== 更新已启动，服务器将在几秒后重启 ===');
+
       return ok(reply, { message: '更新成功，服务器即将重启' });
     } catch (e: any) {
+      log(`ERROR: ${e.message}`);
       return fail(reply, 500, e.message || '更新失败');
     }
   });
