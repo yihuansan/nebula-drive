@@ -397,16 +397,29 @@ onMounted(async () => { await load(); });
         <el-table-column label="修改时间" width="160">
           <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="380">
+        <el-table-column label="操作" width="240" align="center">
           <template #default="{ row }">
-            <el-button v-if="row.isDir" size="small" link type="primary" @click="openFolder(row)"><el-icon><FolderOpened /></el-icon>&nbsp;打开</el-button>
-            <el-button v-if="!row.isDir" size="small" link @click="openPreview(row)"><el-icon><View /></el-icon>&nbsp;预览</el-button>
-            <el-button v-if="!row.isDir" size="small" link @click="download(row)"><el-icon><Download /></el-icon>&nbsp;下载</el-button>
-            <el-button size="small" link @click="openRename(row)"><el-icon><Edit /></el-icon>&nbsp;重命名</el-button>
-            <el-button size="small" link @click="openMove(row)"><el-icon><Switch /></el-icon>&nbsp;移动</el-button>
-            <el-button size="small" link @click="openShare(row)"><el-icon><Share /></el-icon>&nbsp;分享</el-button>
-            <el-button size="small" link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon>&nbsp;删除</el-button>
-            <el-button size="small" link type="warning" @click="unstar(row)"><el-icon><StarFilled /></el-icon>&nbsp;取消收藏</el-button>
+            <el-tooltip :content="row.isDir ? '打开' : '预览'" placement="top">
+              <button class="act-btn" @click="row.isDir ? openFolder(row) : openPreview(row)"><el-icon><FolderOpened v-if="row.isDir" /><View v-else /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="下载" placement="top">
+              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && download(row)"><el-icon><Download /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="重命名" placement="top">
+              <button class="act-btn" @click="openRename(row)"><el-icon><Edit /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="移动" placement="top">
+              <button class="act-btn" @click="openMove(row)"><el-icon><Switch /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="分享" placement="top">
+              <button class="act-btn" @click="openShare(row)"><el-icon><Share /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <button class="act-btn act-danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="取消收藏" placement="top">
+              <button class="act-btn act-warn" @click="unstar(row)"><el-icon><StarFilled /></el-icon></button>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -442,16 +455,26 @@ onMounted(async () => { await load(); });
         <el-table-column label="修改时间" width="160">
           <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="300">
+        <el-table-column label="操作" width="200" align="center">
           <template #default="{ row }">
-            <el-button size="small" link @click="toggleStar(browseStorageId, row.path, row.name)">
-              <el-icon><StarFilled v-if="isFav(browseStorageId, row.path)" /><Star v-else /></el-icon>&nbsp;{{ isFav(browseStorageId, row.path) ? '取消收藏' : '收藏' }}
-            </el-button>
-            <el-button v-if="!row.isDir" size="small" link @click="openPreview(row)"><el-icon><View /></el-icon>&nbsp;预览</el-button>
-            <el-button v-if="!row.isDir" size="small" link @click="download(row)"><el-icon><Download /></el-icon>&nbsp;下载</el-button>
-            <el-button size="small" link @click="openRename(row)"><el-icon><Edit /></el-icon>&nbsp;重命名</el-button>
-            <el-button size="small" link @click="openMove(row)"><el-icon><Switch /></el-icon>&nbsp;移动</el-button>
-            <el-button size="small" link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon>&nbsp;删除</el-button>
+            <el-tooltip :content="isFav(browseStorageId, row.path) ? '取消收藏' : '收藏'" placement="top">
+              <button class="act-btn" @click="toggleStar(browseStorageId, row.path, row.name)"><el-icon><StarFilled v-if="isFav(browseStorageId, row.path)" /><Star v-else /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="预览" placement="top">
+              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && openPreview(row)"><el-icon><View /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="下载" placement="top">
+              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && download(row)"><el-icon><Download /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="重命名" placement="top">
+              <button class="act-btn" @click="openRename(row)"><el-icon><Edit /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="移动" placement="top">
+              <button class="act-btn" @click="openMove(row)"><el-icon><Switch /></el-icon></button>
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <button class="act-btn act-danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></button>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -540,6 +563,27 @@ onMounted(async () => { await load(); });
   overflow: hidden;
   text-align: left;
 }
+.act-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  margin: 0 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--text-secondary, #888);
+  font-size: 15px;
+  vertical-align: middle;
+}
+.act-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--el-color-primary, #409eff); }
+.act-danger:hover { color: var(--el-color-danger, #f56c6c); }
+.act-warn:hover { color: var(--el-color-warning, #e6a23c); }
+.act-off { opacity: 0.35; cursor: not-allowed; }
+.act-off:hover { background: transparent; color: var(--text-secondary, #888); }
 .browse-bar {
   display: flex;
   align-items: center;
