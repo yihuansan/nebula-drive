@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
 import { useTheme, THEMES, type ThemeKey } from '../useTheme';
@@ -316,6 +317,42 @@ function openDir(e: any) {
 function goCrumb(p: string) {
   path.value = p;
   load();
+}
+
+/* ---------- 文件收藏（星标） ---------- */
+const starredSet = ref<Set<string>>(new Set());
+function starKey(row: any) {
+  return storageId.value + '||' + row.path;
+}
+function isStarred(row: any) {
+  return starredSet.value.has(starKey(row));
+}
+async function loadFavorites() {
+  try {
+    const r = await api('/favorites');
+    const set = new Set<string>();
+    for (const f of r.favorites) set.add(f.storage_id + '||' + f.path);
+    starredSet.value = set;
+  } catch { /* ignore */ }
+}
+async function toggleStar(row: any) {
+  const key = starKey(row);
+  const starred = starredSet.value.has(key);
+  try {
+    if (starred) {
+      await api(`/favorites?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`, { method: 'DELETE' });
+      starredSet.value.delete(key);
+      ElMessage.success('已取消收藏');
+    } else {
+      await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: storageId.value, path: row.path }) });
+      starredSet.value.add(key);
+      ElMessage.success('已收藏');
+    }
+  } catch (e: any) {
+    if (starred) starredSet.value.add(key);
+    else starredSet.value.delete(key);
+    ElMessage.error(e.message || '操作失败');
+  }
 }
 
 /** 更多菜单命令分发 */
@@ -1053,9 +1090,16 @@ function photoUrl(row: any) {
   return `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
 }
 
+const route = useRoute();
 onMounted(async () => {
   await loadStorages();
   await loadAllTags();
+  await loadFavorites();
+  // 深链：从收藏页等跳转携带 storage/path 参数时，定位到指定位置
+  const qStorage = route.query.storage ? Number(route.query.storage) : null;
+  const qPath = route.query.path ? String(route.query.path) : null;
+  if (qStorage && storages.value.some((s: any) => s.id === qStorage)) storageId.value = qStorage;
+  if (qPath) path.value = qPath;
   if (storageId.value) load();
 });
 </script>
@@ -1174,6 +1218,10 @@ onMounted(async () => {
           <div class="fc-name" :title="row.name">{{ row.name }}</div>
           <div class="fc-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
           <div class="fc-actions" @click.stop>
+            <!-- 收藏星标（文件/文件夹均可） -->
+            <el-tooltip :content="isStarred(row) ? '取消收藏' : '收藏'" placement="top" :show-after="300">
+              <el-button link @click="toggleStar(row)"><el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon></el-button>
+            </el-tooltip>
             <!-- 文件夹：保持原有操作 -->
             <template v-if="row.isDir">
               <el-tooltip content="分享" placement="top" :show-after="300">
@@ -1247,6 +1295,9 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="330">
           <template #default="{ row }">
+            <el-button link size="small" @click.stop="toggleStar(row)">
+              <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>&nbsp;{{ isStarred(row) ? '已收藏' : '收藏' }}
+            </el-button>
             <!-- 文件夹：保持原有操作 -->
             <template v-if="row.isDir">
               <el-button link type="primary" size="small" @click.stop="openShare(row)">分享</el-button>
@@ -1642,6 +1693,11 @@ onMounted(async () => {
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @click="closeContextMenu"
     >
+      <!-- 收藏（文件/文件夹通用） -->
+      <button class="ctx-item" @click.stop="toggleStar(contextMenu.target)">
+        <el-icon><StarFilled v-if="isStarred(contextMenu.target)" /><Star v-else /></el-icon> {{ isStarred(contextMenu.target) ? '取消收藏' : '收藏' }}
+      </button>
+      <div class="ctx-sep" />
       <template v-if="contextMenu.target?.isDir">
         <!-- 文件夹菜单 -->
         <button class="ctx-item" @click.stop="ctxAction('open')">

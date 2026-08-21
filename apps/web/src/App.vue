@@ -116,6 +116,7 @@ const pageTitle = computed(() => {
   const map: Record<string, string> = {
     '/': '文件管理',
     '/recent': '最近全部',
+    '/favorites': '我的收藏',
     '/media': '视频文档',
     '/quick-access': '快捷访问',
     '/hidden': '隐藏空间',
@@ -138,6 +139,7 @@ const pageTitle = computed(() => {
 const mainMenuAll = [
   { path: '/', label: '文件管理', icon: 'Folder', perm: 'files:view' },
   { path: '/recent', label: '最近全部', icon: 'Clock', perm: 'files:view' },
+  { path: '/favorites', label: '我的收藏', icon: 'StarFilled', perm: 'files:view' },
   { path: '/media', label: '视频文档', icon: 'VideoCamera', perm: 'files:view' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star', perm: 'files:view' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock', perm: 'files:view' },

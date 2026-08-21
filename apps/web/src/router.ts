@@ -8,6 +8,7 @@ export const router = createRouter({
     { path: '/s/:token', name: 'share', component: () => import('./views/PublicShare.vue') },
     { path: '/', name: 'files', component: () => import('./views/Files.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/recent', name: 'recent', component: () => import('./views/Recent.vue'), meta: { auth: true, perm: 'files:view' } },
+    { path: '/favorites', name: 'favorites', component: () => import('./views/Favorites.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/media', name: 'media', component: () => import('./views/Media.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/quick-access', name: 'quick-access', component: () => import('./views/QuickAccess.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/hidden', name: 'hidden', component: () => import('./views/HiddenSpace.vue'), meta: { auth: true, perm: 'files:view' } },
