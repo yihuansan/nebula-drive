@@ -122,27 +122,6 @@ async function doBatchDelete() {
   load();
 }
 
-/* ---------- 立即清理（按保留天数手动触发） ---------- */
-async function doPurge() {
-  if (retentionDays.value <= 0) return;
-  try {
-    await ElMessageBox.confirm(
-      `将立即执行自动清理：彻底删除超过 ${retentionDays.value} 天的回收站条目（不可恢复）。`,
-      '立即清理',
-      { type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-  try {
-    const r = await api('/recycle/purge', { method: 'POST' });
-    ElMessage.success(`已清理 ${r.purged} 条超过 ${r.days} 天的记录`);
-    load();
-  } catch (e: any) {
-    ElMessage.error(e.message || '清理失败');
-  }
-}
-
 /* ---------- 清空 ---------- */
 async function doClear() {
   try {
@@ -205,9 +184,6 @@ onMounted(() => {
           </el-button>
           <el-button size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
             <el-icon><Delete /></el-icon>&nbsp;删除选中
-          </el-button>
-          <el-button size="small" type="warning" :disabled="retentionDays <= 0 || !items.length" @click="doPurge">
-            <el-icon><Timer /></el-icon>&nbsp;立即清理
           </el-button>
           <el-button size="small" type="danger" :disabled="!items.length" @click="doClear">
             <el-icon><Delete /></el-icon>&nbsp;清空回收站
