@@ -10,7 +10,6 @@ export const router = createRouter({
     { path: '/recent', name: 'recent', component: () => import('./views/Recent.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/favorites', name: 'favorites', component: () => import('./views/Favorites.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/media', name: 'media', component: () => import('./views/Media.vue'), meta: { auth: true, perm: 'files:view' } },
-    { path: '/quick-access', name: 'quick-access', component: () => import('./views/QuickAccess.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/hidden', name: 'hidden', component: () => import('./views/HiddenSpace.vue'), meta: { auth: true, perm: 'files:view' } },
     { path: '/subscriptions', name: 'subscriptions', component: () => import('./views/Subscriptions.vue'), meta: { auth: true, perm: 'files:share' } },
     { path: '/shares', name: 'shares', component: () => import('./views/Shares.vue'), meta: { auth: true, perm: 'files:share' } },
