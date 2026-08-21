@@ -10,7 +10,7 @@ const loading = ref(false);
 const favorites = ref<any[]>([]);
 const storageMap = ref<Record<number, string>>({});
 
-/* ---------- 文件类型识别（与文件管理一致） ---------- */
+/* ---------- 文件类型识别 ---------- */
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
 const CODE_EXTS = ['js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'html', 'css', 'json', 'sh', 'vue', 'go', 'rs', 'xml', 'yml', 'yaml', 'md', 'txt', 'sql', 'ini', 'conf', 'env'];
 function extOf(name: string) { return name.split('.').pop()?.toLowerCase() || ''; }
@@ -31,18 +31,24 @@ function formatTime(t: string) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/* ---------- 数据加载：拉取收藏 + 解析每项的文件信息 ---------- */
+/* ---------- 收藏状态集合（即时星标反馈） ---------- */
+const starredSet = ref<Set<string>>(new Set());
+function starKey(storageId: number, path: string) { return storageId + '||' + path; }
+function isFav(storageId: number, path: string) { return starredSet.value.has(starKey(storageId, path)); }
+
+/* ---------- 数据加载 ---------- */
 async function load() {
   loading.value = true;
   try {
-    // 存储名称
     try {
       const sr = await api('/storages');
       sr.storages.forEach((s: any) => { storageMap.value[s.id] = s.name; });
     } catch { /* ignore */ }
     const r = await api('/favorites');
     const favs = r.favorites || [];
-    // 并行解析每个收藏项的文件信息（大小 / 是否目录 / 修改时间）
+    // 构建星标集合
+    starredSet.value = new Set(favs.map((f: any) => starKey(f.storage_id, f.path)));
+    // 并行解析每项文件信息
     const resolved = await Promise.all(favs.map(async (f: any) => {
       try {
         const mr = await api(`/files/${encodeURIComponent(f.path)}/meta?storageId=${f.storage_id}`);
@@ -56,6 +62,70 @@ async function load() {
     ElMessage.error(e.message || '加载收藏失败');
   } finally {
     loading.value = false;
+  }
+}
+
+/* ---------- 文件夹浏览 ---------- */
+const view = ref<'list' | 'browse'>('list');
+const browseStorageId = ref(1);
+const browsePath = ref('/');
+const browseEntries = ref<any[]>([]);
+const browseLoading = ref(false);
+
+const browseCrumbs = computed(() => {
+  const out = [{ name: '根目录', path: '/' }];
+  if (browsePath.value !== '/') {
+    const segs = browsePath.value.split('/').filter(Boolean);
+    let acc = '';
+    for (const s of segs) { acc += '/' + s; out.push({ name: s, path: acc }); }
+  }
+  return out;
+});
+
+async function openFolder(fav: any) {
+  browseStorageId.value = fav.storage_id;
+  browsePath.value = fav.path;
+  view.value = 'browse';
+  await loadBrowse();
+}
+
+async function loadBrowse() {
+  browseLoading.value = true;
+  try {
+    const r = await api(`/files?storageId=${browseStorageId.value}&path=${encodeURIComponent(browsePath.value)}&sort=name&order=asc`);
+    browseEntries.value = r.entries.map((e: any) => ({ ...e, storage_id: browseStorageId.value }));
+  } catch (e: any) {
+    ElMessage.error(e.message || '打开文件夹失败');
+  } finally {
+    browseLoading.value = false;
+  }
+}
+
+function browseTo(path: string) {
+  browsePath.value = path;
+  loadBrowse();
+}
+
+function backToList() {
+  view.value = 'list';
+  load();
+}
+
+/* ---------- 星标切换（浏览视图中收藏/取消） ---------- */
+async function toggleStar(storageId: number, path: string, name: string) {
+  const key = starKey(storageId, path);
+  try {
+    if (starredSet.value.has(key)) {
+      await api(`/favorites?storageId=${storageId}&path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+      starredSet.value.delete(key);
+      ElMessage.success('已取消收藏');
+    } else {
+      await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId, path }) });
+      starredSet.value.add(key);
+      ElMessage.success('已收藏「' + name + '」');
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '操作失败');
   }
 }
 
@@ -134,12 +204,16 @@ async function doRename() {
   const newPath = (dir === '/' ? '' : dir) + '/' + name;
   try {
     await api('/files/rename', { method: 'POST', body: JSON.stringify({ storageId: renameTarget.value.storage_id, path: p, newPath }) });
-    // 同步更新收藏：移除旧的，添加新的
-    await api(`/favorites?storageId=${renameTarget.value.storage_id}&path=${encodeURIComponent(p)}`, { method: 'DELETE' });
-    await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: renameTarget.value.storage_id, path: newPath }) });
+    // 若是收藏项，同步指向新路径
+    if (isFav(renameTarget.value.storage_id, p)) {
+      await api(`/favorites?storageId=${renameTarget.value.storage_id}&path=${encodeURIComponent(p)}`, { method: 'DELETE' });
+      await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: renameTarget.value.storage_id, path: newPath }) });
+      starredSet.value.delete(starKey(renameTarget.value.storage_id, p));
+      starredSet.value.add(starKey(renameTarget.value.storage_id, newPath));
+    }
     ElMessage.success('重命名成功');
     renameDialog.value = false;
-    load();
+    afterFileOp();
   } catch (e: any) {
     ElMessage.error(e.message || '重命名失败');
   }
@@ -189,12 +263,15 @@ async function doMove() {
   const destPath = (destDir === '/' ? '' : destDir) + fileName(moveTarget.value.path);
   try {
     await api('/files/move', { method: 'POST', body: JSON.stringify({ storageId: moveTarget.value.storage_id, path: moveTarget.value.path, destPath }) });
-    // 同步更新收藏
-    await api(`/favorites?storageId=${moveTarget.value.storage_id}&path=${encodeURIComponent(moveTarget.value.path)}`, { method: 'DELETE' });
-    await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: moveTarget.value.storage_id, path: destPath }) });
+    if (isFav(moveTarget.value.storage_id, moveTarget.value.path)) {
+      await api(`/favorites?storageId=${moveTarget.value.storage_id}&path=${encodeURIComponent(moveTarget.value.path)}`, { method: 'DELETE' });
+      await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: moveTarget.value.storage_id, path: destPath }) });
+      starredSet.value.delete(starKey(moveTarget.value.storage_id, moveTarget.value.path));
+      starredSet.value.add(starKey(moveTarget.value.storage_id, destPath));
+    }
     ElMessage.success('移动成功');
     moveDialog.value = false;
-    load();
+    afterFileOp();
   } catch (e: any) {
     ElMessage.error(e.message || '移动失败');
   }
@@ -245,23 +322,33 @@ async function doDelete(fav: any) {
   } catch { return; }
   try {
     await api('/files/delete', { method: 'POST', body: JSON.stringify({ storageId: fav.storage_id, path: fav.path }) });
-    await api(`/favorites?storageId=${fav.storage_id}&path=${encodeURIComponent(fav.path)}`, { method: 'DELETE' });
+    if (isFav(fav.storage_id, fav.path)) {
+      await api(`/favorites?storageId=${fav.storage_id}&path=${encodeURIComponent(fav.path)}`, { method: 'DELETE' });
+      starredSet.value.delete(starKey(fav.storage_id, fav.path));
+    }
     ElMessage.success('已删除到回收站');
-    load();
+    afterFileOp();
   } catch (e: any) {
     ElMessage.error(e.message || '删除失败');
   }
 }
 
-/* ---------- 取消收藏 ---------- */
+/* ---------- 取消收藏（收藏列表中） ---------- */
 async function unstar(fav: any) {
   try {
     await api(`/favorites?storageId=${fav.storage_id}&path=${encodeURIComponent(fav.path)}`, { method: 'DELETE' });
+    starredSet.value.delete(starKey(fav.storage_id, fav.path));
     ElMessage.success('已取消收藏');
     load();
   } catch (e: any) {
     ElMessage.error(e.message || '取消收藏失败');
   }
+}
+
+/** 文件操作后刷新当前视图 */
+function afterFileOp() {
+  if (view.value === 'browse') loadBrowse();
+  load();
 }
 
 /* ---------- 前往文件（次要：跳转到文件管理定位目录） ---------- */
@@ -278,49 +365,98 @@ onMounted(async () => { await load(); });
       <h2>我的收藏</h2>
       <div class="fav-toolbar">
         <span class="fav-count" v-if="favorites.length">共 {{ favorites.length }} 项</span>
-        <el-button size="small" @click="load" :loading="loading">刷新</el-button>
+        <el-button size="small" @click="view === 'browse' ? loadBrowse() : load()" :loading="loading || browseLoading">刷新</el-button>
       </div>
     </div>
 
-    <el-empty v-if="!loading && !favorites.length" description="还没有收藏任何文件，去文件管理里点星标吧" />
+    <!-- 收藏列表视图 -->
+    <template v-if="view === 'list'">
+      <el-empty v-if="!loading && !favorites.length" description="还没有收藏任何文件，去文件管理里点星标吧" />
+      <el-table v-else :data="favorites" v-loading="loading" class="fav-table">
+        <el-table-column label="名称" min-width="220">
+          <template #default="{ row }">
+            <div class="fav-name-cell" :class="{ clickable: row.isDir }" @click="row.isDir && openFolder(row)">
+              <el-icon :size="20" :color="row.isDir ? '#e8b04b' : (isImage(fileName(row.path)) ? '#ec4899' : '#409eff')">
+                <FolderOpened v-if="row.isDir" />
+                <Picture v-else-if="isImage(fileName(row.path))" />
+                <VideoPlay v-else-if="isVideo(fileName(row.path))" />
+                <Headset v-else-if="isAudio(fileName(row.path))" />
+                <Document v-else />
+              </el-icon>
+              <span class="fav-name" :title="row.path">{{ fileName(row.path) }}</span>
+              <el-tag v-if="!row.valid" type="warning" size="small">已失效</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="路径" min-width="200">
+          <template #default="{ row }">{{ row.path }}</template>
+        </el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="380">
+          <template #default="{ row }">
+            <el-button v-if="row.isDir" size="small" link type="primary" @click="openFolder(row)"><el-icon><FolderOpened /></el-icon>&nbsp;打开</el-button>
+            <el-button v-if="!row.isDir" size="small" link @click="openPreview(row)"><el-icon><View /></el-icon>&nbsp;预览</el-button>
+            <el-button v-if="!row.isDir" size="small" link @click="download(row)"><el-icon><Download /></el-icon>&nbsp;下载</el-button>
+            <el-button size="small" link @click="openRename(row)"><el-icon><Edit /></el-icon>&nbsp;重命名</el-button>
+            <el-button size="small" link @click="openMove(row)"><el-icon><Switch /></el-icon>&nbsp;移动</el-button>
+            <el-button size="small" link @click="openShare(row)"><el-icon><Share /></el-icon>&nbsp;分享</el-button>
+            <el-button size="small" link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon>&nbsp;删除</el-button>
+            <el-button size="small" link type="warning" @click="unstar(row)"><el-icon><StarFilled /></el-icon>&nbsp;取消收藏</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
 
-    <el-table v-else :data="favorites" v-loading="loading" class="fav-table" :default-sort="{ prop: 'mtime', order: 'descending' }">
-      <el-table-column label="名称" min-width="220">
-        <template #default="{ row }">
-          <div class="fav-name-cell">
-            <el-icon :size="20" :color="row.isDir ? '#e8b04b' : (isImage(fileName(row.path)) ? '#ec4899' : '#409eff')">
-              <FolderOpened v-if="row.isDir" />
-              <Picture v-else-if="isImage(fileName(row.path))" />
-              <VideoPlay v-else-if="isVideo(fileName(row.path))" />
-              <Headset v-else-if="isAudio(fileName(row.path))" />
-              <Document v-else />
-            </el-icon>
-            <span class="fav-name" :title="row.path">{{ fileName(row.path) }}</span>
-            <el-tag v-if="!row.valid" type="warning" size="small">已失效</el-tag>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="路径" min-width="200">
-        <template #default="{ row }">{{ row.path }}</template>
-      </el-table-column>
-      <el-table-column label="大小" width="100">
-        <template #default="{ row }">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</template>
-      </el-table-column>
-      <el-table-column label="修改时间" width="160" prop="mtime">
-        <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="360">
-        <template #default="{ row }">
-          <el-button v-if="!row.isDir" size="small" link @click="openPreview(row)"><el-icon><View /></el-icon>&nbsp;预览</el-button>
-          <el-button v-if="!row.isDir" size="small" link @click="download(row)"><el-icon><Download /></el-icon>&nbsp;下载</el-button>
-          <el-button size="small" link @click="openRename(row)"><el-icon><Edit /></el-icon>&nbsp;重命名</el-button>
-          <el-button size="small" link @click="openMove(row)"><el-icon><Switch /></el-icon>&nbsp;移动</el-button>
-          <el-button size="small" link @click="openShare(row)"><el-icon><Share /></el-icon>&nbsp;分享</el-button>
-          <el-button size="small" link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon>&nbsp;删除</el-button>
-          <el-button size="small" link type="warning" @click="unstar(row)"><el-icon><StarFilled /></el-icon>&nbsp;取消收藏</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 文件夹浏览视图 -->
+    <template v-else>
+      <div class="browse-bar glass">
+        <el-button size="small" @click="backToList"><el-icon><ArrowLeft /></el-icon>&nbsp;返回收藏列表</el-button>
+        <el-breadcrumb separator="/" class="browse-crumbs">
+          <el-breadcrumb-item v-for="(c, i) in browseCrumbs" :key="c.path" @click="browseTo(c.path)" style="cursor: pointer">{{ c.name }}</el-breadcrumb-item>
+        </el-breadcrumb>
+      </div>
+      <el-table :data="browseEntries" v-loading="browseLoading" class="fav-table">
+        <el-table-column label="名称" min-width="240">
+          <template #default="{ row }">
+            <div class="fav-name-cell" :class="{ clickable: row.isDir }" @click="row.isDir && browseTo(row.path)">
+              <el-icon :size="20" :color="row.isDir ? '#e8b04b' : (isImage(row.name) ? '#ec4899' : '#409eff')">
+                <FolderOpened v-if="row.isDir" />
+                <Picture v-else-if="isImage(row.name)" />
+                <VideoPlay v-else-if="isVideo(row.name)" />
+                <Headset v-else-if="isAudio(row.name)" />
+                <Document v-else />
+              </el-icon>
+              <span class="fav-name">{{ row.name }}</span>
+              <el-icon v-if="isFav(browseStorageId, row.path)" :size="14" color="#f5a623"><StarFilled /></el-icon>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</template>
+        </el-table-column>
+        <el-table-column label="修改时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="300">
+          <template #default="{ row }">
+            <el-button size="small" link @click="toggleStar(browseStorageId, row.path, row.name)">
+              <el-icon><StarFilled v-if="isFav(browseStorageId, row.path)" /><Star v-else /></el-icon>&nbsp;{{ isFav(browseStorageId, row.path) ? '取消收藏' : '收藏' }}
+            </el-button>
+            <el-button v-if="!row.isDir" size="small" link @click="openPreview(row)"><el-icon><View /></el-icon>&nbsp;预览</el-button>
+            <el-button v-if="!row.isDir" size="small" link @click="download(row)"><el-icon><Download /></el-icon>&nbsp;下载</el-button>
+            <el-button size="small" link @click="openRename(row)"><el-icon><Edit /></el-icon>&nbsp;重命名</el-button>
+            <el-button size="small" link @click="openMove(row)"><el-icon><Switch /></el-icon>&nbsp;移动</el-button>
+            <el-button size="small" link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon>&nbsp;删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="!browseLoading && !browseEntries.length" class="browse-empty">此文件夹为空</div>
+    </template>
 
     <!-- 预览对话框 -->
     <el-dialog v-model="previewDialog" :title="previewName" width="800px" :before-close="closePreview">
@@ -395,6 +531,8 @@ onMounted(async () => { await load(); });
 .fav-toolbar { display: flex; align-items: center; gap: 12px; }
 .fav-count { font-size: 13px; color: var(--text-secondary); }
 .fav-name-cell { display: flex; align-items: center; gap: 8px; }
+.fav-name-cell.clickable { cursor: pointer; }
+.fav-name-cell.clickable:hover .fav-name { color: var(--el-color-primary, #409eff); }
 .fav-name {
   font-size: 14px;
   font-weight: 500;
@@ -402,6 +540,16 @@ onMounted(async () => { await load(); });
   overflow: hidden;
   text-align: left;
 }
+.browse-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.browse-crumbs { flex: 1; }
+.browse-empty { text-align: center; color: var(--text-secondary); padding: 40px; font-size: 13px; }
 .fav-preview { min-height: 200px; display: flex; align-items: center; justify-content: center; }
 .pv-img { max-width: 100%; max-height: 70vh; object-fit: contain; }
 .pv-video { max-width: 100%; max-height: 70vh; }
