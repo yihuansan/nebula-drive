@@ -66,15 +66,16 @@ export function createUser(username: string, password: string, role: 'admin' | '
   return findById(Number(info.lastInsertRowid))!;
 }
 
-export function updateUser(id: number, patch: { password?: string; role?: string; displayName?: string; quota?: number; status?: string }): void {
+export function updateUser(id: number, patch: { username?: string; password?: string; role?: string; displayName?: string; quota?: number; status?: string }): void {
   const db = getDb();
   const u = findById(id);
   if (!u) throw new Error('用户不存在');
   db.prepare(
     `UPDATE users SET
-       password_hash = ?, role = ?, display_name = ?, quota = ?, status = ?, updated_at = datetime('now')
+       username = ?, password_hash = ?, role = ?, display_name = ?, quota = ?, status = ?, updated_at = datetime('now')
      WHERE id = ?`,
   ).run(
+    patch.username || u.username,
     patch.password ? hashPassword(patch.password) : u.password_hash,
     patch.role || u.role,
     patch.displayName ?? u.display_name,

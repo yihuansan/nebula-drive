@@ -122,7 +122,7 @@ function handleAvatarChange(file: any) {
 
 async function loadLoginHistory() {
   try {
-    const r = await api('/logs?type=login&size=20');
+    const r = await api('/logs?type=login&size=20&mine=true');
     loginHistory.value = r.rows || [];
   } catch { /* 忽略 */ }
 }

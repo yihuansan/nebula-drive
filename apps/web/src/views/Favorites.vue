@@ -351,6 +351,26 @@ function afterFileOp() {
   load();
 }
 
+/* ---------- 更多菜单命令分发 ---------- */
+function handleMoreCmd(cmd: string, row: any) {
+  switch (cmd) {
+    case 'rename': openRename(row); break;
+    case 'move': openMove(row); break;
+    case 'share': openShare(row); break;
+    case 'unstar': unstar(row); break;
+  }
+}
+
+/** 浏览视图更多菜单（收藏是切换，不是取消） */
+function handleBrowseMoreCmd(cmd: string, row: any) {
+  switch (cmd) {
+    case 'toggleStar': toggleStar(browseStorageId.value, row.path, row.name); break;
+    case 'rename': openRename(row); break;
+    case 'move': openMove(row); break;
+    case 'share': openShare(row); break;
+  }
+}
+
 /* ---------- 前往文件（次要：跳转到文件管理定位目录） ---------- */
 function goToFile(fav: any) {
   router.push({ path: '/', query: { storage: fav.storage_id, path: fileDir(fav.path) } });
@@ -397,29 +417,26 @@ onMounted(async () => { await load(); });
         <el-table-column label="修改时间" width="160">
           <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" align="center">
+        <el-table-column label="操作" width="300">
           <template #default="{ row }">
-            <el-tooltip :content="row.isDir ? '打开' : '预览'" placement="top">
-              <button class="act-btn" @click="row.isDir ? openFolder(row) : openPreview(row)"><el-icon><FolderOpened v-if="row.isDir" /><View v-else /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="下载" placement="top">
-              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && download(row)"><el-icon><Download /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="重命名" placement="top">
-              <button class="act-btn" @click="openRename(row)"><el-icon><Edit /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="移动" placement="top">
-              <button class="act-btn" @click="openMove(row)"><el-icon><Switch /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="分享" placement="top">
-              <button class="act-btn" @click="openShare(row)"><el-icon><Share /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="删除" placement="top">
-              <button class="act-btn act-danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="取消收藏" placement="top">
-              <button class="act-btn act-warn" @click="unstar(row)"><el-icon><StarFilled /></el-icon></button>
-            </el-tooltip>
+            <div class="row-actions">
+              <el-button v-if="row.isDir" link size="small" @click="openRename(row)">重命名</el-button>
+              <el-button v-if="row.isDir" link type="primary" size="small" @click="openFolder(row)">打开</el-button>
+              <el-button v-else-if="isPreviewable(fileName(row.path))" link type="primary" size="small" @click="openPreview(row)">预览</el-button>
+              <el-button link type="primary" size="small" :disabled="row.isDir" @click="download(row)">下载</el-button>
+              <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
+                <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="!row.isDir" command="rename">重命名</el-dropdown-item>
+                    <el-dropdown-item command="move">移动</el-dropdown-item>
+                    <el-dropdown-item command="share">分享</el-dropdown-item>
+                    <el-dropdown-item command="unstar" divided>取消收藏</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -455,26 +472,25 @@ onMounted(async () => { await load(); });
         <el-table-column label="修改时间" width="160">
           <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" align="center">
+        <el-table-column label="操作" width="300">
           <template #default="{ row }">
-            <el-tooltip :content="isFav(browseStorageId, row.path) ? '取消收藏' : '收藏'" placement="top">
-              <button class="act-btn" @click="toggleStar(browseStorageId, row.path, row.name)"><el-icon><StarFilled v-if="isFav(browseStorageId, row.path)" /><Star v-else /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="预览" placement="top">
-              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && openPreview(row)"><el-icon><View /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="下载" placement="top">
-              <button class="act-btn" :class="{ 'act-off': row.isDir }" @click="!row.isDir && download(row)"><el-icon><Download /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="重命名" placement="top">
-              <button class="act-btn" @click="openRename(row)"><el-icon><Edit /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="移动" placement="top">
-              <button class="act-btn" @click="openMove(row)"><el-icon><Switch /></el-icon></button>
-            </el-tooltip>
-            <el-tooltip content="删除" placement="top">
-              <button class="act-btn act-danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></button>
-            </el-tooltip>
+            <div class="row-actions">
+              <el-button v-if="row.isDir" link size="small" @click="openRename(row)">重命名</el-button>
+              <el-button v-if="!row.isDir && isPreviewable(row.name)" link type="primary" size="small" @click="openPreview(row)">预览</el-button>
+              <el-button link type="primary" size="small" :disabled="row.isDir" @click="download(row)">下载</el-button>
+              <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleBrowseMoreCmd(cmd, row)">
+                <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="!row.isDir" command="rename">重命名</el-dropdown-item>
+                    <el-dropdown-item command="toggleStar" divided>{{ isFav(browseStorageId, row.path) ? '取消收藏' : '收藏' }}</el-dropdown-item>
+                    <el-dropdown-item command="move">移动</el-dropdown-item>
+                    <el-dropdown-item command="share">分享</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -563,27 +579,9 @@ onMounted(async () => { await load(); });
   overflow: hidden;
   text-align: left;
 }
-.act-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 28px;
-  margin: 0 2px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 6px;
-  color: var(--text-secondary, #888);
-  font-size: 15px;
-  vertical-align: middle;
-}
-.act-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--el-color-primary, #409eff); }
-.act-danger:hover { color: var(--el-color-danger, #f56c6c); }
-.act-warn:hover { color: var(--el-color-warning, #e6a23c); }
-.act-off { opacity: 0.35; cursor: not-allowed; }
-.act-off:hover { background: transparent; color: var(--text-secondary, #888); }
+.row-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.row-actions .el-button:not(.more-btn) { width: 72px; }
+.more-btn { padding: 4px; }
 .browse-bar {
   display: flex;
   align-items: center;

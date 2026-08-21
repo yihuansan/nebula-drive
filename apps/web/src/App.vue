@@ -385,7 +385,7 @@ function applyBackground(s?: any) {
             </div>
             <div v-if="!collapsed" class="user-info">
               <p class="user-name">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</p>
-              <p class="user-role">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</p>
+              <p class="user-role">@{{ auth.user?.username || 'user' }}</p>
             </div>
           </div>
         </div>

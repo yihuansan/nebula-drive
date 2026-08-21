@@ -1,6 +1,6 @@
 {
   "name": "nebula-drive",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "NebulaDrive 星云网盘 — 对标 ZFile 的自托管网盘系统（服务端 + Web + 同步引擎 + 桌面端 + 移动端）",
   "scripts": {

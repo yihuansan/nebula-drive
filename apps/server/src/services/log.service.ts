@@ -15,8 +15,15 @@ export function listOpLogs(page: number, size: number) {
   return { total, page, size, rows };
 }
 
-export function listLoginLogs(page: number, size: number) {
+export function listLoginLogs(page: number, size: number, username?: string) {
   const db = getDb();
+  if (username) {
+    const total = (db.prepare('SELECT COUNT(*) AS c FROM login_logs WHERE username = ?').get(username) as { c: number }).c;
+    const rows = db
+      .prepare('SELECT * FROM login_logs WHERE username = ? ORDER BY id DESC LIMIT ? OFFSET ?')
+      .all(username, size, (page - 1) * size);
+    return { total, page, size, rows };
+  }
   const total = (db.prepare('SELECT COUNT(*) AS c FROM login_logs').get() as { c: number }).c;
   const rows = db
     .prepare('SELECT * FROM login_logs ORDER BY id DESC LIMIT ? OFFSET ?')
