@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Loading } from '@element-plus/icons-vue';
 import { api } from '../../api';
 
 const storages = ref<any[]>([]);
 const types = ref<any[]>([]);
 const loading = ref(false);
+const hasLoaded = ref(false); // 是否已完成过首次加载
 
 async function load() {
   loading.value = true;
@@ -17,6 +19,7 @@ async function load() {
     ElMessage.error(e.message || '加载存储失败');
   } finally {
     loading.value = false;
+    hasLoaded.value = true;
   }
 }
 
@@ -182,7 +185,11 @@ onMounted(load);
         </div>
       </div>
 
-      <el-table v-loading="loading" :data="storages">
+      <div v-if="!hasLoaded" class="table-loading">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>加载中…</span>
+      </div>
+      <el-table v-else v-loading="loading" :data="storages">
         <el-table-column label="名称" min-width="160">
           <template #default="{ row }">
             <div class="storage-cell">
@@ -352,6 +359,17 @@ onMounted(load);
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ---------- 加载占位 ---------- */
+.table-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 60px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 /* ---------- 表格 ---------- */
