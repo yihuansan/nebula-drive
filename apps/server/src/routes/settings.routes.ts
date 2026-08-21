@@ -33,6 +33,14 @@ export async function settingsRoutes(app: FastifyInstance) {
     return ok(reply, publicSettings());
   });
 
+  /**
+   * 完整设置（需 settings:view 权限）：返回全部键值，含 SMTP 等管理项。
+   * 供管理员设置页加载使用；公开接口 /settings 不含敏感键。
+   */
+  app.get('/settings/all', { preHandler: requirePermission('settings:view') }, async (req, reply) => {
+    return ok(reply, getAllSettings());
+  });
+
   app.put('/settings', { preHandler: requirePermission('settings:manage') }, async (req, reply) => {
     const b = req.body as Record<string, unknown>;
     try {

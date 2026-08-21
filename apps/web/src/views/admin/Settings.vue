@@ -232,7 +232,7 @@ async function load() {
   try {
     // 自动检查更新
     checkUpdate();
-    const s = await api('/settings');
+    const s = await api('/settings/all');
     form.value.appName = s.appName || 'NebulaDrive 星云网盘';
     form.value.logo = s.logo || '';
     form.value.notice = s.notice || '';

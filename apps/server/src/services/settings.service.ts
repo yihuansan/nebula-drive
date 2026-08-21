@@ -92,6 +92,7 @@ export function publicSettings() {
     minPasswordLen: settingNum('minPasswordLen', 8),
     maxFileSizeGB: settingNum('maxFileSizeGB', 0),
     shareDefaultExpireDays: settingNum('shareDefaultExpireDays', 0),
+    recycleRetentionDays: settingNum('recycleRetentionDays', 0),
     brandColor: all.brandColor,
     theme: all.theme || 'light-glass',
     bgType: all.bgType || 'theme',
