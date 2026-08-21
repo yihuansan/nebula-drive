@@ -27,10 +27,18 @@ const form = ref({
   bgColor: '#1e2634',
   bgOverlay: 40,
   loginCaptchaThreshold: 3,
+  smtpEnabled: false,
+  smtpHost: '',
+  smtpPort: 465,
+  smtpSecure: true,
+  smtpUser: '',
+  smtpPassword: '',
+  smtpFrom: '',
+  smtpFromName: '',
 });
 
 // 选项卡
-const activeTab = ref<'general' | 'security' | 'storage' | 'appearance' | 'nav' | 'update'>('general');
+const activeTab = ref<'general' | 'security' | 'storage' | 'appearance' | 'nav' | 'email' | 'update'>('general');
 
 // 预设品牌色
 const presetColors = [
@@ -176,6 +184,29 @@ function triggerLogoUpload() {
   logoFileInput.value?.click();
 }
 
+// SMTP 测试邮件
+const testEmailTo = ref('');
+const testEmailSending = ref(false);
+
+async function sendTestEmail() {
+  if (!testEmailTo.value.trim()) {
+    ElMessage.warning('请输入测试邮箱地址');
+    return;
+  }
+  testEmailSending.value = true;
+  try {
+    await api('/settings/smtp/test', {
+      method: 'POST',
+      body: { to: testEmailTo.value.trim() },
+    });
+    ElMessage.success(`测试邮件已发送至 ${testEmailTo.value.trim()}`);
+  } catch (e: any) {
+    ElMessage.error(e.message || '测试邮件发送失败');
+  } finally {
+    testEmailSending.value = false;
+  }
+}
+
 // 更新检查
 const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean } | null>(null);
 const updateChecking = ref(false);
@@ -226,6 +257,14 @@ async function load() {
     form.value.bgColor = s.bgColor || '#1e2634';
     form.value.bgOverlay = Number(s.bgOverlay) || 40;
     form.value.loginCaptchaThreshold = Number(s.loginCaptchaThreshold) || 3;
+    form.value.smtpEnabled = s.smtpEnabled === true;
+    form.value.smtpHost = s.smtpHost || '';
+    form.value.smtpPort = Number(s.smtpPort) || 465;
+    form.value.smtpSecure = s.smtpSecure !== false;
+    form.value.smtpUser = s.smtpUser || '';
+    form.value.smtpPassword = s.smtpPassword || '';
+    form.value.smtpFrom = s.smtpFrom || '';
+    form.value.smtpFromName = s.smtpFromName || '';
   } catch {
     /* 使用默认值 */
   }
@@ -260,6 +299,14 @@ async function doSave() {
         bgColor: form.value.bgColor,
         bgOverlay: String(form.value.bgOverlay),
         loginCaptchaThreshold: String(form.value.loginCaptchaThreshold),
+        smtpEnabled: String(form.value.smtpEnabled),
+        smtpHost: form.value.smtpHost,
+        smtpPort: String(form.value.smtpPort),
+        smtpSecure: String(form.value.smtpSecure),
+        smtpUser: form.value.smtpUser,
+        smtpPassword: form.value.smtpPassword,
+        smtpFrom: form.value.smtpFrom,
+        smtpFromName: form.value.smtpFromName,
       }),
     });
     // 立即应用品牌色
@@ -385,6 +432,9 @@ onMounted(load);
       </button>
       <button class="tab-btn" :class="{ active: activeTab === 'nav' }" @click="activeTab = 'nav'">
         <el-icon><Rank /></el-icon><span>导航</span>
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'email' }" @click="activeTab = 'email'">
+        <el-icon><Message /></el-icon><span>邮件</span>
       </button>
       <button class="tab-btn" :class="{ active: activeTab === 'update' }" @click="activeTab = 'update'">
         <el-icon><Refresh /></el-icon><span>更新</span>
@@ -736,6 +786,99 @@ onMounted(load);
               <el-icon><InfoFilled /></el-icon>
               <span>按住菜单项拖动到目标位置，松手后自动保存</span>
             </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ========== 邮件 ========== -->
+      <div v-show="activeTab === 'email'" class="tab-panel">
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-cyan"><el-icon><Message /></el-icon></div>
+            <div class="card-titles">
+              <h3>SMTP 邮件服务</h3>
+              <p>用于发送注册欢迎邮件等通知。关闭时注册不发送邮件。</p>
+            </div>
+          </div>
+          <div class="settings-rows">
+            <div class="s-row">
+              <span class="s-label">启用邮件服务</span>
+              <div class="s-control">
+                <el-switch v-model="form.smtpEnabled" />
+                <span class="s-hint">开启后，用户注册将自动发送欢迎邮件</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">SMTP 服务器</span>
+              <div class="s-control">
+                <el-input v-model="form.smtpHost" placeholder="如 smtp.qq.com" style="width: 220px" />
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">端口</span>
+              <div class="s-control">
+                <el-input-number v-model="form.smtpPort" :min="1" :max="65535" :step="1" size="small" controls-position="right" />
+                <span class="s-hint">SSL 常用 465 · 非 SSL 常用 587</span>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">加密方式</span>
+              <div class="s-control">
+                <el-radio-group v-model="form.smtpSecure" size="small">
+                  <el-radio-button :value="true">SSL (465)</el-radio-button>
+                  <el-radio-button :value="false">STARTTLS (587)</el-radio-button>
+                </el-radio-group>
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">SMTP 账号</span>
+              <div class="s-control">
+                <el-input v-model="form.smtpUser" placeholder="通常与发件邮箱一致" style="width: 260px" />
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">SMTP 密码 / 授权码</span>
+              <div class="s-control">
+                <el-input v-model="form.smtpPassword" type="password" show-password placeholder="QQ/163 邮箱为授权码，非邮箱密码" style="width: 260px" />
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">发件邮箱</span>
+              <div class="s-control">
+                <el-input v-model="form.smtpFrom" placeholder="默认同 SMTP 账号" style="width: 260px" />
+              </div>
+            </div>
+            <div class="s-row">
+              <span class="s-label">发件人名称</span>
+              <div class="s-control">
+                <el-input v-model="form.smtpFromName" placeholder="如 NebulaDrive 团队（可选）" style="width: 260px" />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div class="card-icon ci-green"><el-icon><Promotion /></el-icon></div>
+            <div class="card-titles">
+              <h3>发送测试邮件</h3>
+              <p>填写一个邮箱地址，验证 SMTP 配置是否正确</p>
+            </div>
+          </div>
+          <div class="test-email-row">
+            <el-input
+              v-model="testEmailTo"
+              placeholder="输入要接收测试邮件的邮箱地址"
+              style="width: 320px"
+              clearable
+            >
+              <template #prepend>
+                <el-icon><Message /></el-icon>
+              </template>
+            </el-input>
+            <el-button type="primary" :loading="testEmailSending" @click="sendTestEmail">
+              发送测试邮件
+            </el-button>
           </div>
         </section>
       </div>
@@ -1224,6 +1367,14 @@ onMounted(load);
   flex-direction: column;
   gap: 16px;
   max-width: 480px;
+}
+
+/* ---------- 测试邮件 ---------- */
+.test-email-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
 /* ---------- 保存栏 ---------- */

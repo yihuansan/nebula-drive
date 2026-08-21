@@ -11,6 +11,7 @@ import {
 } from '../services/user.service.js';
 import { profileService } from '../services/profile.service.js';
 import { getSetting, settingNum } from '../services/settings.service.js';
+import { sendWelcomeEmail, isSmtpEnabled } from '../services/email.service.js';
 import { getUserPermissions } from '../services/role.service.js';
 import {
   createCaptcha,
@@ -78,20 +79,35 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post('/auth/register', async (req, reply) => {
     if (getSetting('registerEnabled') === 'false') return fail(reply, 403, '注册已关闭');
-    const { username, password, displayName } = (req.body || {}) as {
+    const { username, password, displayName, email } = (req.body || {}) as {
       username?: string;
       password?: string;
       displayName?: string;
+      email?: string;
     };
     if (!username || !password) return fail(reply, 400, '请输入用户名和密码');
     if (username.length < 3 || username.length > 32) return fail(reply, 400, '用户名长度 3-32');
     const minLen = settingNum('minPasswordLen', 8);
     if (password.length < minLen) return fail(reply, 400, `密码至少 ${minLen} 位`);
+    const emailVal = (email || '').trim();
+    if (emailVal && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+      return fail(reply, 400, '邮箱格式不正确');
+    }
     try {
       const u = createUser(username, password, 'user', displayName || '', 0);
+      // 保存邮箱到用户资料
+      if (emailVal) profileService.update(u.id, { email: emailVal });
+      // SMTP 启用且填写了邮箱 → 发送欢迎邮件（尽力而为，不阻断注册）
+      let emailSent = false;
+      let emailError: string | undefined;
+      if (isSmtpEnabled() && emailVal) {
+        const r = await sendWelcomeEmail(emailVal, u.username, displayName || '');
+        emailSent = r.ok;
+        emailError = r.error;
+      }
       const ttlSec = settingNum('sessionTimeoutHours', 168) * 3600;
       const token = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, ttlSec);
-      return ok(reply, { token, user: publicUser(u) });
+      return ok(reply, { token, user: publicUser(u), emailSent, emailError });
     } catch (e: any) {
       return fail(reply, 409, e?.message?.includes('UNIQUE') ? '用户名已存在' : '注册失败');
     }

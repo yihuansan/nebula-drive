@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requirePermission, ok, fail } from '../auth/middleware.js';
 import { getAllSettings, setSetting, publicSettings } from '../services/settings.service.js';
+import { sendTestEmail, isSmtpConfigured } from '../services/email.service.js';
 import { dirs } from '../config.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,6 +84,24 @@ export async function settingsRoutes(app: FastifyInstance) {
       return ok(reply, { url });
     } catch (e: any) {
       return fail(reply, 400, e?.message || 'Logo 上传失败');
+    }
+  });
+
+  /** SMTP 测试邮件：向指定邮箱发送一封测试邮件，用于验证配置 */
+  app.post('/settings/smtp/test', { preHandler: requirePermission('settings:manage') }, async (req, reply) => {
+    const { to } = (req.body || {}) as { to?: string };
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return fail(reply, 400, '请输入有效的测试邮箱地址');
+    }
+    if (!isSmtpConfigured()) {
+      return fail(reply, 400, 'SMTP 尚未配置完整（需启用并填写服务器地址与发件邮箱）');
+    }
+    try {
+      const r = await sendTestEmail(to);
+      if (!r.ok) return fail(reply, 502, r.error || '测试邮件发送失败');
+      return ok(reply, { ok: true, to });
+    } catch (e: any) {
+      return fail(reply, 502, e?.message || '测试邮件发送失败');
     }
   });
 }

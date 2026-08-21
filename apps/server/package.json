@@ -17,7 +17,8 @@
     "adm-zip": "^0.6.0",
     "archiver": "^8.0.0",
     "basic-ftp": "^5.2.0",
-    "fastify": "^4.28.1"
+    "fastify": "^4.28.1",
+    "nodemailer": "^9.0.5"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",

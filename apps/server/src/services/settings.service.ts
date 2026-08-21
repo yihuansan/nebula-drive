@@ -14,6 +14,8 @@ import { getDb } from '../db/index.js';
  * - bgGradientFrom / bgGradientTo / bgGradientAngle 渐变（gradient 模式）
  * - bgColor 纯色（color 模式）
  * - bgOverlay 背景遮罩强度 0-100（保证玻璃卡片可读）
+ * - smtpEnabled / smtpHost / smtpPort / smtpSecure / smtpUser / smtpPassword
+ *   smtpFrom / smtpFromName  SMTP 邮件服务（注册欢迎邮件 / 测试邮件）
  */
 const DEFAULTS: Record<string, string> = {
   appName: 'NebulaDrive 星云网盘',
@@ -39,6 +41,14 @@ const DEFAULTS: Record<string, string> = {
   bgColor: '',
   bgOverlay: '40',
   loginCaptchaThreshold: '3',
+  smtpEnabled: 'false',
+  smtpHost: '',
+  smtpPort: '465',
+  smtpSecure: 'true',
+  smtpUser: '',
+  smtpPassword: '',
+  smtpFrom: '',
+  smtpFromName: '',
 };
 
 export function getSetting(key: string): string | null {

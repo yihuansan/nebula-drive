@@ -33,6 +33,7 @@ const showRegister = ref(false);
 const regUsername = ref('');
 const regPassword = ref('');
 const regDisplayName = ref('');
+const regEmail = ref('');
 const regLoading = ref(false);
 
 async function doRegister() {
@@ -52,9 +53,15 @@ async function doRegister() {
         username: regUsername.value.trim(),
         password: regPassword.value,
         displayName: regDisplayName.value.trim() || undefined,
+        email: regEmail.value.trim() || undefined,
       },
     });
-    ElMessage.success('注册成功，正在登录...');
+    // 若发送了欢迎邮件，给出提示
+    if (r.emailSent) {
+      ElMessage.success('注册成功，欢迎邮件已发送至 ' + regEmail.value.trim());
+    } else {
+      ElMessage.success('注册成功，正在登录...');
+    }
     // 自动登录
     auth.token = r.token;
     auth.user = r.user;
@@ -190,6 +197,9 @@ async function doLogin() {
         </el-form-item>
         <el-form-item label="显示名称（可选）">
           <el-input v-model="regDisplayName" placeholder="显示在个人资料中" clearable />
+        </el-form-item>
+        <el-form-item label="邮箱（可选）">
+          <el-input v-model="regEmail" placeholder="用于接收注册欢迎邮件" clearable />
         </el-form-item>
         <el-form-item label="密码">
           <el-input
