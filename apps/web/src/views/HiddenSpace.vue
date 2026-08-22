@@ -341,7 +341,7 @@ function fmtSize(bytes: number) {
 .empty {
   grid-column: 1 / -1;
   text-align: center;
-  padding: 80px 20px;
+  padding: 60px 20px;
   color: var(--text-secondary);
   display: flex;
   flex-direction: column;

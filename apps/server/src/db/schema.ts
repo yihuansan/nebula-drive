@@ -208,7 +208,56 @@ export function runMigrations(db: DatabaseSync): void {
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS idx_quick_access_storage ON quick_access (storage_id);
+    CREATE TABLE IF NOT EXISTS shared_items (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  storage_id INTEGER NOT NULL,
+  path       TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  is_dir     INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER NOT NULL,
+  expires_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS share_recipients (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  share_id   INTEGER NOT NULL,
+  user_id    INTEGER NOT NULL,
+  permission TEXT NOT NULL DEFAULT 'view' CHECK (permission IN ('view','download','manage')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (share_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS share_activity (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  share_id   INTEGER NOT NULL,
+  user_id    INTEGER NOT NULL,
+  action     TEXT NOT NULL CHECK (action IN ('view','download','transfer')),
+  path       TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_shared_items_creator ON shared_items (created_by);
+CREATE INDEX IF NOT EXISTS idx_share_recipients_user ON share_recipients (user_id);
+CREATE INDEX IF NOT EXISTS idx_share_recipients_share ON share_recipients (share_id);
+CREATE INDEX IF NOT EXISTS idx_share_activity_share ON share_activity (share_id);
+CREATE INDEX IF NOT EXISTS idx_quick_access_storage ON quick_access (storage_id);
+
+    -- 最近访问记录（真正的访问历史）
+    CREATE TABLE IF NOT EXISTS recent_access (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      storage_id INTEGER NOT NULL,
+      path       TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      is_dir     INTEGER NOT NULL DEFAULT 0,
+      accessed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (user_id, storage_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_recent_access_user ON recent_access (user_id, accessed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_recent_access_storage ON recent_access (storage_id);
+
     CREATE INDEX IF NOT EXISTS idx_op_logs_created ON op_logs (created_at);
     CREATE INDEX IF NOT EXISTS idx_sync_files_pair ON sync_files (pair_id);
     CREATE INDEX IF NOT EXISTS idx_file_versions_path ON file_versions (storage_id, path);
@@ -216,5 +265,41 @@ export function runMigrations(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_file_comments_path ON file_comments (storage_id, path);
     CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history (user_id);
     CREATE INDEX IF NOT EXISTS idx_file_favorites_user ON file_favorites (user_id);
+
+    -- 2FA 双因素认证
+    CREATE TABLE IF NOT EXISTS user_2fa (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       INTEGER NOT NULL UNIQUE,
+      secret        TEXT NOT NULL,
+      enabled       INTEGER NOT NULL DEFAULT 0,
+      recovery_codes TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_2fa_user ON user_2fa (user_id);
+
+    -- 设备管理 / 会话追踪
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id       INTEGER NOT NULL,
+      token_hash    TEXT NOT NULL,
+      device_name   TEXT NOT NULL DEFAULT 'Unknown',
+      ip_address    TEXT DEFAULT '',
+      user_agent    TEXT DEFAULT '',
+      is_current    INTEGER NOT NULL DEFAULT 0,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      last_active   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions (user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions (token_hash);
+
+    -- 已撤销的 token
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      token_hash    TEXT PRIMARY KEY,
+      user_id       INTEGER NOT NULL,
+      expires_at    TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens (user_id);
   `);
 }

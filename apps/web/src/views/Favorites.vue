@@ -7,6 +7,9 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 const router = useRouter();
 
 const loading = ref(false);
+const hasLoaded = ref(false);
+const showSkeleton = ref(false);
+let skeletonTimer: ReturnType<typeof setTimeout> | null = null;
 const favorites = ref<any[]>([]);
 const storageMap = ref<Record<number, string>>({});
 
@@ -39,16 +42,27 @@ function isFav(storageId: number, path: string) { return starredSet.value.has(st
 /* ---------- 数据加载 ---------- */
 async function load() {
   loading.value = true;
+  // 延迟 150ms 后才显示骨架屏，快速加载时不闪烁
+  skeletonTimer = setTimeout(() => {
+    if (!hasLoaded.value) showSkeleton.value = true;
+  }, 150);
   try {
-    try {
-      const sr = await api('/storages');
+    // /storages 和 /favorites 并行加载，/storages 不阻塞主流程
+    // fast=1 跳过用量计算，快速返回
+    const storagesPromise = api('/storages?fast=1').then((sr: any) => {
       sr.storages.forEach((s: any) => { storageMap.value[s.id] = s.name; });
-    } catch { /* ignore */ }
+    }).catch(() => {});
     const r = await api('/favorites');
     const favs = r.favorites || [];
     // 构建星标集合
     starredSet.value = new Set(favs.map((f: any) => starKey(f.storage_id, f.path)));
-    // 并行解析每项文件信息
+    // 立即显示收藏列表（基础信息），不等待 meta 解析
+    favorites.value = favs.map((f: any) => ({ ...f, name: fileName(f.path), size: 0, isDir: false, mtime: '', valid: true }));
+    hasLoaded.value = true; // 立即标记为已加载，解除骨架屏阻塞
+    if (skeletonTimer) { clearTimeout(skeletonTimer); skeletonTimer = null; }
+    showSkeleton.value = false;
+    loading.value = false; // 初始数据已显示，关闭 loading
+    // 后台异步解析每项文件详细信息
     const resolved = await Promise.all(favs.map(async (f: any) => {
       try {
         const mr = await api(`/files/${encodeURIComponent(f.path)}/meta?storageId=${f.storage_id}`);
@@ -60,8 +74,11 @@ async function load() {
     favorites.value = resolved;
   } catch (e: any) {
     ElMessage.error(e.message || '加载收藏失败');
+    hasLoaded.value = true;
   } finally {
+    if (skeletonTimer) { clearTimeout(skeletonTimer); skeletonTimer = null; }
     loading.value = false;
+    showSkeleton.value = false;
   }
 }
 
@@ -391,8 +408,20 @@ onMounted(async () => { await load(); });
 
     <!-- 收藏列表视图 -->
     <template v-if="view === 'list'">
-      <el-empty v-if="!loading && !favorites.length" description="还没有收藏任何文件，去文件管理里点星标吧" />
-      <el-table v-else :data="favorites" v-loading="loading" class="fav-table">
+      <!-- 骨架屏：仅在加载超过 150ms 时显示 -->
+      <template v-if="showSkeleton">
+        <div class="skeleton-table glass">
+          <div v-for="i in 6" :key="'sk-' + i" class="skeleton-row">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-name"></div>
+            <div class="skeleton-meta"></div>
+            <div class="skeleton-actions"></div>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+      <el-empty v-if="hasLoaded && !favorites.length" description="还没有收藏任何文件，去文件管理里点星标吧" />
+      <el-table v-else-if="favorites.length" :data="favorites" v-loading="loading" class="fav-table fade-in">
         <el-table-column label="名称" min-width="220">
           <template #default="{ row }">
             <div class="fav-name-cell" :class="{ clickable: row.isDir }" @click="row.isDir && openFolder(row)">
@@ -440,6 +469,7 @@ onMounted(async () => { await load(); });
           </template>
         </el-table-column>
       </el-table>
+      </template>
     </template>
 
     <!-- 文件夹浏览视图 -->
@@ -559,6 +589,63 @@ onMounted(async () => { await load(); });
 
 <style scoped>
 .fav-page { padding: 20px; }
+
+/* ---------- 骨架屏 + 淡入动画 ---------- */
+.skeleton-table {
+  border-radius: 16px;
+  padding: 16px;
+}
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.skeleton-row:last-child { border-bottom: none; }
+.skeleton-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-name {
+  flex: 1;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-meta {
+  width: 80px;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.12) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-actions {
+  width: 120px;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.1) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.fade-in {
+  animation: fade-in-up 0.35s ease-out both;
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .page-header {
   display: flex;
   justify-content: space-between;

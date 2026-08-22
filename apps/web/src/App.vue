@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { api } from './api';
@@ -20,6 +20,23 @@ const layoutType = computed(() => {
 const appName = ref('NebulaDrive 星云网盘');
 const collapsed = ref(false);
 const showThemePicker = ref(false);
+
+// 主题选择器选项（来自 useTheme 的 THEMES 元数据）
+const themeOptions = Object.entries(THEMES).map(([key, v]) => ({ key, ...v }));
+
+// 点击主题选择器外部时关闭
+function onDocClick(e: MouseEvent) {
+  if (showThemePicker.value) {
+    const el = (e.target as HTMLElement)?.closest?.('.theme-wrap');
+    if (!el) showThemePicker.value = false;
+  }
+}
+onMounted(() => {
+  document.addEventListener('click', onDocClick);
+});
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick);
+});
 
 // 更新检查状态
 const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean; releaseNotes: string; publishedAt: string } | null>(null);
@@ -117,6 +134,7 @@ const pageTitle = computed(() => {
     '/': '文件管理',
     '/recent': '最近全部',
     '/favorites': '我的收藏',
+    '/quick-access': '快捷访问',
     '/media': '视频文档',
     '/hidden': '隐藏空间',
     '/subscriptions': '转存和订阅',
@@ -139,10 +157,12 @@ const mainMenuAll = [
   { path: '/', label: '文件管理', icon: 'Folder', perm: 'files:view' },
   { path: '/recent', label: '最近全部', icon: 'Clock', perm: 'files:view' },
   { path: '/favorites', label: '我的收藏', icon: 'StarFilled', perm: 'files:view' },
+  { path: '/quick-access', label: '快捷访问', icon: 'Star', perm: 'files:view' },
   { path: '/media', label: '视频文档', icon: 'VideoCamera', perm: 'files:view' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock', perm: 'files:view' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download', perm: 'files:share' },
   { path: '/shares', label: '我的分享', icon: 'Share', perm: 'files:share' },
+  { path: '/share-collab', label: '共享管理', icon: 'User', perm: 'files:share' },
   { path: '/recycle', label: '回收站', icon: 'Delete', perm: 'recycle:view' },
   { path: '/profile', label: '我的资料', icon: 'User', perm: 'files:view' },
 ];
@@ -155,8 +175,24 @@ const adminMenuAll = [
   { path: '/admin/sync', label: '同步管理', icon: 'Refresh', perm: 'sync:view' },
   { path: '/admin/stats', label: '系统统计', icon: 'DataLine', perm: 'stats:view' },
 ];
-const mainMenu = computed(() => mainMenuAll.filter((m) => !m.perm || perm(m.perm)));
-const adminMenu = computed(() => adminMenuAll.filter((m) => !m.perm || perm(m.perm)));
+// 读取导航隐藏配置
+function getHiddenNav(): Record<string, boolean> {
+  try {
+    const saved = localStorage.getItem('nebula_nav_hidden');
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return {};
+}
+const hiddenNav = ref<Record<string, boolean>>(getHiddenNav());
+
+const mainMenu = computed(() => mainMenuAll.filter((m) => {
+  if (hiddenNav.value[m.path]) return false;
+  return !m.perm || perm(m.perm);
+}));
+const adminMenu = computed(() => adminMenuAll.filter((m) => {
+  if (hiddenNav.value[m.path]) return false;
+  return !m.perm || perm(m.perm);
+}));
 
 /* ---------- 导航菜单拖拽自定义 ---------- */
 const isCustomizingNav = ref(false);
@@ -241,9 +277,19 @@ onMounted(async () => {
   try {
     const s = await api('/settings');
     if (s?.appName) appName.value = s.appName;
-    // 应用主题（后端设置优先）
+    // 应用主题：用户已选（localStorage nebula_theme）优先；未选过则应用管理员全局主题
     if (s?.theme) {
-      document.documentElement.setAttribute('data-theme', s.theme);
+      const saved = localStorage.getItem('nebula_theme');
+      if (saved) {
+        // 用户已选过主题，确保 data-theme 与 localStorage 一致（防御性）
+        document.documentElement.setAttribute('data-theme', saved);
+      } else if (s.theme in THEMES) {
+        // 用户未选过：应用管理员全局主题并写入 nebula_theme
+        setTheme(s.theme as ThemeKey);
+      } else {
+        // legacy 主题：保持旧行为
+        document.documentElement.setAttribute('data-theme', s.theme);
+      }
     }
     applyBrandColor(s?.brandColor);
     applyBackground(s);
@@ -377,6 +423,18 @@ function applyBackground(s?: any) {
           </template>
         </nav>
 
+        <!-- 流光主题：AI 助手占位（侧边栏常驻，仅 flow 显示，折叠时隐藏）。
+             AI 能力尚未上线：诚实占位，不假装在工作、无假加载态，保留流光视觉创意。 -->
+        <div class="ai-panel">
+          <div class="ai-head">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI 助手</span>
+            <span class="ai-badge">即将上线</span>
+          </div>
+          <div class="ai-sub">流光主题的视觉核心。AI 文件整理、检索与洞察能力尚在规划中，将在后续版本上线。</div>
+          <div class="ai-core flow-core"></div>
+        </div>
+
         <div class="aside-footer">
           <div class="user-chip">
             <div class="avatar">
@@ -425,6 +483,24 @@ function applyBackground(s?: any) {
             </template>
           </nav>
           <div class="topnav-user">
+            <div class="theme-wrap">
+              <button class="theme-btn glass-btn" :title="'当前主题：' + THEMES[theme]?.label + '，点击切换'" @click="showThemePicker = !showThemePicker">
+                <span class="theme-dot">{{ THEMES[theme]?.icon }}</span>
+              </button>
+              <div v-if="showThemePicker" class="theme-picker glass">
+                <button
+                  v-for="t in themeOptions"
+                  :key="t.key"
+                  class="theme-opt"
+                  :class="{ active: theme === t.key }"
+                  @click="setTheme(t.key); showThemePicker = false"
+                >
+                  <span class="theme-dot">{{ t.icon }}</span>
+                  <span class="theme-label">{{ t.label }}</span>
+                  <span v-if="theme === t.key" class="tick">✓</span>
+                </button>
+              </div>
+            </div>
             <div class="avatar-sm">
               <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="avatar" />
               <span v-else>{{ (auth.user?.displayName || auth.user?.username || 'U').charAt(0) }}</span>
@@ -436,26 +512,21 @@ function applyBackground(s?: any) {
         <header class="header glass" v-if="layoutType !== 'topnav'">
           <div class="page-title">{{ pageTitle }}</div>
           <div class="header-right">
-            <!-- 主题切换：太阳/月亮按钮 + 四主题快选 -->
             <div class="theme-wrap">
-              <button
-                class="theme-btn glass-btn"
-                :title="`当前主题：${THEMES[theme].label}`"
-                @click="showThemePicker = !showThemePicker"
-              >
-                <el-icon><Sunny v-if="isGlassTheme" /><Moon v-else /></el-icon>
+              <button class="theme-btn glass-btn" :title="'当前主题：' + THEMES[theme]?.label + '，点击切换'" @click="showThemePicker = !showThemePicker">
+                <span class="theme-dot">{{ THEMES[theme]?.icon }}</span>
               </button>
               <div v-if="showThemePicker" class="theme-picker glass">
                 <button
-                  v-for="(meta, key) in THEMES"
-                  :key="key"
+                  v-for="t in themeOptions"
+                  :key="t.key"
                   class="theme-opt"
-                  :class="{ active: theme === key }"
-                  @click="setTheme(key as ThemeKey); showThemePicker = false"
+                  :class="{ active: theme === t.key }"
+                  @click="setTheme(t.key); showThemePicker = false"
                 >
-                  <span class="theme-dot">{{ meta.icon }}</span>
-                  <span>{{ meta.label }}</span>
-                  <span v-if="theme === key" class="tick">✓</span>
+                  <span class="theme-dot">{{ t.icon }}</span>
+                  <span class="theme-label">{{ t.label }}</span>
+                  <span v-if="theme === t.key" class="tick">✓</span>
                 </button>
               </div>
             </div>
@@ -482,6 +553,17 @@ function applyBackground(s?: any) {
         </div>
 
         <main class="main">
+          <!-- 流光主题：AI 洞察大卡（Bento 顶部，仅 flow 显示）。
+               AI 能力尚未上线：诚实占位，去掉"正在建立索引…"的永久假加载态，不欺骗用户。 -->
+          <div class="ai-insight">
+            <div class="ai-title">
+              <el-icon><DataAnalysis /></el-icon>
+              <span>AI 洞察</span>
+              <span class="ai-badge">即将上线</span>
+            </div>
+            <div class="ai-desc">此区域为 AI 文件洞察预留（整理常用内容、媒体库、聚合关键信息等）。该能力尚在规划中，当前未处理任何文件数据。</div>
+            <div class="ai-core flow-core"></div>
+          </div>
           <router-view />
         </main>
       </div>
@@ -925,9 +1007,13 @@ function applyBackground(s?: any) {
   width: 20px;
   text-align: center;
 }
+.theme-label {
+  font-size: 13px;
+}
 .tick {
   margin-left: auto;
   color: var(--accent);
+  font-size: 13px;
 }
 .user-name {
   font-size: 14px;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
@@ -9,10 +9,153 @@ const router = useRouter();
 const auth = useAuthStore();
 const profile = ref<any>(null);
 const profileLoading = ref(false);
+const hasLoaded = ref(false);
+const showSkeleton = ref(false);
+let skeletonTimer: ReturnType<typeof setTimeout> | null = null;
 const profileForm = ref({ avatar: '', email: '', bio: '', phone: '' });
 const loginHistory = ref<any[]>([]);
 const searchHistory = ref<any[]>([]);
 const storageUsage = ref<any[]>([]);
+
+/* ---------- 设备管理 ---------- */
+const sessions = ref<any[]>([]);
+const sessionsLoading = ref(false);
+const revokeAllLoading = ref(false);
+const revokeLoading = ref<number | null>(null);
+
+async function loadSessions() {
+  sessionsLoading.value = true;
+  try {
+    const r = await api('/sessions');
+    sessions.value = r.sessions || [];
+  } catch { /* 忽略 */ }
+  finally {
+    sessionsLoading.value = false;
+  }
+}
+
+function confirmDeleteSession(id: number, deviceName: string, isCurrent: boolean) {
+  const message = isCurrent
+    ? '删除当前设备将退出登录，确定要继续吗？'
+    : `确定要删除「${deviceName}」吗？该设备将立即退出登录。`;
+  
+  ElMessageBox.confirm(message, '删除设备', {
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+  }).then(() => {
+    revokeSession(id, isCurrent);
+  }).catch(() => {});
+}
+
+async function revokeSession(id: number, isCurrent?: boolean) {
+  revokeLoading.value = id;
+  try {
+    await api(`/sessions/${id}`, { method: 'DELETE' });
+    if (isCurrent) {
+      // 删除当前设备，退出登录
+      auth.logout();
+      router.push('/login');
+    } else {
+      ElMessage.success('已删除该设备，它将立即退出登录');
+      await loadSessions();
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败');
+  } finally {
+    revokeLoading.value = null;
+  }
+}
+
+async function revokeAllOtherSessions() {
+  const otherCount = sessions.value.filter(s => !s.isCurrent).length;
+  if (otherCount === 0) return;
+  
+  ElMessageBox.confirm(`确定要删除所有其他 ${otherCount} 个设备吗？这些设备将立即退出登录。`, '删除所有其他设备', {
+    confirmButtonText: '全部删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+  }).then(() => {
+    doRevokeAll();
+  }).catch(() => {});
+}
+
+async function doRevokeAll() {
+  revokeAllLoading.value = true;
+  try {
+    const r = await api('/sessions/revoke-others', { method: 'POST' });
+    ElMessage.success(`已撤销 ${r.revoked} 个设备，它们需要重新登录`);
+    await loadSessions();
+  } catch (e: any) {
+    ElMessage.error(e.message || '撤销失败');
+  } finally {
+    revokeAllLoading.value = false;
+  }
+}
+
+/* ---------- 2FA 双因素认证 ---------- */
+const twoFaStatus = ref<{ enabled: boolean; secret?: string }>({ enabled: false });
+const twoFaSetupVisible = ref(false);
+const twoFaSecret = ref('');
+const twoFaQrUri = ref('');
+const twoFaQrDataUrl = ref('');
+const twoFaCode = ref('');
+const twoFaVerifying = ref(false);
+const twoFaRecoveryCodes = ref<string[]>([]);
+const twoFaRecoveryVisible = ref(false);
+
+async function loadTwoFaStatus() {
+  try {
+    const r = await api('/2fa/status');
+    twoFaStatus.value = r;
+  } catch { /* ignore */ }
+}
+
+async function startTwoFaSetup() {
+  try {
+    const r = await api('/2fa/enable', { method: 'POST' });
+    twoFaSecret.value = r.secret;
+    twoFaQrUri.value = r.qrUri;
+    twoFaQrDataUrl.value = r.qrDataUrl;
+    twoFaSetupVisible.value = true;
+  } catch (e: any) {
+    ElMessage.error(e.message || '启用失败');
+  }
+}
+
+async function verifyTwoFa() {
+  twoFaVerifying.value = true;
+  try {
+    const r = await api('/2fa/verify', { method: 'POST', body: JSON.stringify({ code: twoFaCode.value }) });
+    twoFaRecoveryCodes.value = r.recoveryCodes;
+    twoFaRecoveryVisible.value = true;
+    twoFaSetupVisible.value = false;
+    twoFaCode.value = '';
+    twoFaStatus.value = { enabled: true };
+    ElMessage.success('2FA 已启用');
+  } catch (e: any) {
+    ElMessage.error(e.message || '验证失败');
+  } finally {
+    twoFaVerifying.value = false;
+  }
+}
+
+async function disableTwoFa() {
+  try {
+    await api('/2fa/disable', { method: 'POST', body: JSON.stringify({ code: twoFaCode.value }) });
+    twoFaStatus.value = { enabled: false };
+    twoFaCode.value = '';
+    ElMessage.success('2FA 已禁用');
+  } catch (e: any) {
+    ElMessage.error(e.message || '禁用失败');
+  }
+}
+
+function copyRecoveryCodes() {
+  const text = twoFaRecoveryCodes.value.join('\n');
+  navigator.clipboard.writeText(text);
+  ElMessage.success('恢复码已复制到剪贴板');
+}
 const saving = ref(false);
 const avatarUploading = ref(false);
 const avatarPreviewVisible = ref(false);
@@ -159,18 +302,50 @@ function usageColor(pct: number) {
 
 onMounted(async () => {
   profileLoading.value = true;
-  await Promise.all([loadProfile(), loadLoginHistory(), loadSearchHistory(), loadStorageUsage()]);
+  // 延迟 150ms 后才显示骨架屏，快速加载时不闪烁
+  skeletonTimer = setTimeout(() => {
+    if (!hasLoaded.value) showSkeleton.value = true;
+  }, 150);
+  // 核心数据并行加载
+  await Promise.all([loadProfile(), loadLoginHistory(), loadSearchHistory(), loadTwoFaStatus(), loadSessions()]);
+  // 立即显示页面，存储用量在后台加载
+  if (skeletonTimer) { clearTimeout(skeletonTimer); skeletonTimer = null; }
   profileLoading.value = false;
+  hasLoaded.value = true;
+  showSkeleton.value = false;
+  // 存储用量后台加载，不阻塞页面显示
+  loadStorageUsage();
 });
 </script>
 
 <template>
   <div class="profile-page">
-    <div class="profile-layout">
+    <!-- 骨架屏：仅在加载超过 150ms 时显示 -->
+    <template v-if="showSkeleton">
+      <div class="profile-layout">
+        <div class="profile-card glass skeleton-card">
+          <div class="skeleton-title"></div>
+          <div class="skeleton-avatar"></div>
+          <div class="skeleton-form">
+            <div class="skeleton-row" v-for="i in 4" :key="'pf-sk-' + i"></div>
+          </div>
+        </div>
+        <div class="profile-right">
+          <div class="profile-card glass skeleton-card" v-for="i in 3" :key="'pr-sk-' + i">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-row" v-for="j in 3" :key="'pr-sk-row-' + i + '-' + j"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+    <!-- 真实内容：带淡入动画 -->
+    <div v-else class="profile-layout fade-in">
       <!-- 左侧：个人资料 -->
       <div class="profile-card glass">
         <h2 class="section-title">个人资料</h2>
-        <div v-loading="profileLoading" class="profile-body">
+        <div class="profile-body">
           <div class="avatar-section">
             <el-avatar :size="80" :src="profileForm.avatar || undefined" class="avatar-clickable" @click="previewAvatar">
               <el-icon><User /></el-icon>
@@ -281,7 +456,87 @@ onMounted(async () => {
           </div>
           <div v-if="!searchHistory.length" class="empty-tip">暂无搜索记录</div>
         </div>
+
+        <!-- 2FA 双因素认证 -->
+        <div class="profile-card glass">
+          <h2 class="section-title">
+            双因素认证 (2FA)
+            <el-tag v-if="twoFaStatus.enabled" type="success" size="small">已启用</el-tag>
+            <el-tag v-else type="info" size="small">未启用</el-tag>
+          </h2>
+          <p class="twoFa-desc">使用 Google Authenticator 或 1Password 等 TOTP 应用保护账号安全</p>
+
+          <template v-if="!twoFaStatus.enabled">
+            <el-button type="primary" size="small" @click="startTwoFaSetup">启用 2FA</el-button>
+          </template>
+          <template v-else>
+            <div class="twoFa-enabled-actions">
+              <el-input v-model="twoFaCode" placeholder="输入 6 位验证码" maxlength="6" size="small" style="width: 160px" />
+              <el-button type="danger" size="small" @click="disableTwoFa">禁用 2FA</el-button>
+            </div>
+          </template>
+        </div>
+
+        <!-- 设备管理 -->
+        <div class="profile-card glass">
+          <h2 class="section-title">
+            登录设备
+            <el-button link type="danger" size="small" v-if="sessions.length > 1" @click="revokeAllOtherSessions" :loading="revokeAllLoading">
+              删除所有其他设备
+            </el-button>
+          </h2>
+          <div v-if="sessionsLoading" class="empty-tip">加载中...</div>
+          <div v-else-if="!sessions.length" class="empty-tip">暂无设备记录</div>
+          <div v-else>
+            <div v-for="s in sessions" :key="s.id" class="session-item">
+              <div class="session-info">
+                <span class="session-device">{{ s.deviceName }}</span>
+                <el-tag v-if="s.isCurrent" type="success" size="small">当前设备</el-tag>
+                <span class="session-ip">{{ s.ipAddress }}</span>
+              </div>
+              <div class="session-meta">
+                <span class="session-time">最后活跃：{{ fmtTime(s.lastActive) }}</span>
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="revokeLoading === s.id"
+                  @click="confirmDeleteSession(s.id, s.deviceName, s.isCurrent)"
+                >
+                  删除
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <!-- 2FA 设置对话框 -->
+      <el-dialog v-model="twoFaSetupVisible" title="启用双因素认证" width="480px">
+        <div class="twoFa-setup">
+          <p>请使用 Google Authenticator、1Password 或其他 TOTP 应用扫描以下二维码：</p>
+          <div class="twoFa-qr">
+            <img :src="twoFaQrDataUrl" alt="2FA QR Code" />
+          </div>
+          <p class="twoFa-manual">或手动输入密钥：<code>{{ twoFaSecret }}</code></p>
+          <el-input v-model="twoFaCode" placeholder="输入 6 位验证码" maxlength="6" size="large" style="margin-top: 16px" />
+          <el-button type="primary" :loading="twoFaVerifying" @click="verifyTwoFa" style="margin-top: 16px">验证并启用</el-button>
+        </div>
+      </el-dialog>
+
+      <!-- 恢复码对话框 -->
+      <el-dialog v-model="twoFaRecoveryVisible" title="恢复码" width="500px">
+        <div class="twoFa-recovery">
+          <el-alert type="warning" :closable="false" style="margin-bottom: 16px">
+            <template #title>请妥善保存以下恢复码</template>
+            <template #default>每个恢复码只能使用一次，用于在丢失 authenticator 应用时恢复访问</template>
+          </el-alert>
+          <div class="recovery-codes">
+            <code v-for="(c, i) in twoFaRecoveryCodes" :key="i" class="recovery-code">{{ c }}</code>
+          </div>
+          <el-button type="primary" size="small" @click="copyRecoveryCodes" style="margin-top: 16px">复制全部恢复码</el-button>
+        </div>
+      </el-dialog>
     </div>
   </div>
 
@@ -298,6 +553,58 @@ onMounted(async () => {
   display: flex;
   justify-content: center;
   padding: 20px;
+}
+
+/* ---------- 骨架屏 + 淡入动画 ---------- */
+.skeleton-card {
+  pointer-events: none;
+  user-select: none;
+}
+.skeleton-title {
+  width: 40%;
+  height: 16px;
+  border-radius: 4px;
+  margin-bottom: 20px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  margin-bottom: 20px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.skeleton-row {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.12) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.fade-in {
+  animation: fade-in-up 0.35s ease-out both;
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .profile-layout {
   display: grid;
@@ -386,5 +693,92 @@ onMounted(async () => {
   padding: 20px 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+/* 2FA 样式 */
+.twoFa-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.twoFa-enabled-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.twoFa-setup {
+  text-align: center;
+}
+.twoFa-qr {
+  margin: 16px 0;
+}
+.twoFa-qr img {
+  width: 200px;
+  height: 200px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+}
+.twoFa-manual {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 12px;
+}
+.twoFa-manual code {
+  background: var(--surface);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.twoFa-recovery {
+  text-align: center;
+}
+.recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+}
+.recovery-code {
+  background: var(--surface);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: monospace;
+  color: var(--text);
+}
+
+/* 设备管理样式 */
+.session-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.session-item:last-child {
+  border-bottom: none;
+}
+.session-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.session-device {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+.session-ip {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+.session-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.session-time {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 </style>

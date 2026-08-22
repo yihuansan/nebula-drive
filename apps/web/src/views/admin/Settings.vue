@@ -2,6 +2,9 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api } from '../../api';
+import { useTheme, THEMES, type ThemeKey } from '../../useTheme';
+
+const { setTheme } = useTheme();
 
 const form = ref({
   appName: 'NebulaDrive 星云网盘',
@@ -52,7 +55,7 @@ const presetColors = [
   '#3b82f6', // 蓝色
 ];
 
-/* 主题列表 */
+/* 主题列表：与 useTheme.THEMES 对齐（9 个主题，单一数据源） */
 const themeList = [
   { value: 'light-glass', label: '毛玻璃', desc: '侧边栏 + 玻璃拟态（默认）' },
   { value: 'dark-glass', label: '深色玻璃', desc: '侧边栏 + 暗色玻璃质感' },
@@ -60,6 +63,10 @@ const themeList = [
   { value: 'dashboard', label: '仪表盘', desc: '渐变背景 + 仪表盘风格' },
   { value: 'bento', label: '便当盒', desc: '大圆角卡片 + 便当盒网格' },
   { value: 'command', label: '命令式', desc: '暗黑 + 等宽字体 + 命令风格' },
+  /* 2026 创意新主题 */
+  { value: 'stardust', label: '星尘', desc: '液态玻璃 + 深空星野 + 空间景深' },
+  { value: 'dawn', label: '晨曦', desc: '自然有机 + 暖色晨光 + 尊重注意力' },
+  { value: 'flow', label: '流光', desc: 'AI 原生 + 动态渐变 + 智能中枢' },
 ];
 
 /* ---------- 导航栏自定义 ---------- */
@@ -71,11 +78,13 @@ const navDropTarget = ref<string | null>(null);
 const mainMenuAll = [
   { path: '/', label: '文件管理', icon: 'Folder' },
   { path: '/recent', label: '最近全部', icon: 'Clock' },
-  { path: '/media', label: '视频文档', icon: 'VideoCamera' },
+  { path: '/favorites', label: '我的收藏', icon: 'StarFilled' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star' },
+  { path: '/media', label: '视频文档', icon: 'VideoCamera' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download' },
   { path: '/shares', label: '我的分享', icon: 'Share' },
+  { path: '/share-collab', label: '共享管理', icon: 'User' },
   { path: '/recycle', label: '回收站', icon: 'Delete' },
   { path: '/profile', label: '我的资料', icon: 'User' },
 ];
@@ -92,6 +101,32 @@ const adminMenuAll = [
 
 const mainMenuOrder = ref<string[]>(loadNavOrder('main'));
 const adminMenuOrder = ref<string[]>(loadNavOrder('admin'));
+
+// 导航菜单隐藏配置
+const hiddenNavItems = ref<Record<string, boolean>>(loadNavHidden());
+
+function loadNavHidden(): Record<string, boolean> {
+  try {
+    const saved = localStorage.getItem('nebula_nav_hidden');
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveNavHidden() {
+  try {
+    localStorage.setItem('nebula_nav_hidden', JSON.stringify(hiddenNavItems.value));
+  } catch { /* ignore */ }
+}
+
+function isNavHidden(path: string): boolean {
+  return hiddenNavItems.value[path] === true;
+}
+
+function toggleNavHidden(path: string) {
+  hiddenNavItems.value[path] = !isNavHidden(path);
+  saveNavHidden();
+}
 
 function loadNavOrder(type: string): string[] {
   try {
@@ -171,9 +206,14 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', onGlobalMouseUp);
 });
 
-/* 应用主题 */
+/* 应用主题：统一走 useTheme 单例，写入 nebula_theme（与个人用户同一数据源），刷新不丢 */
 function applyTheme(theme: string) {
-  document.documentElement.setAttribute('data-theme', theme);
+  if (theme in THEMES) {
+    setTheme(theme as ThemeKey);
+  } else {
+    // legacy 主题（不在 THEMES 中）：保持旧行为，直接设置 data-theme
+    document.documentElement.setAttribute('data-theme', theme);
+  }
 }
 const saving = ref(false);
 const bgUploading = ref(false);
@@ -771,7 +811,8 @@ onMounted(load);
                 class="nav-customize-item"
                 :class="{
                   dragging: navMouseDragPath === item.path,
-                  'drop-target': navDropTarget === item.path && navMouseDragPath !== item.path
+                  'drop-target': navDropTarget === item.path && navMouseDragPath !== item.path,
+                  'nav-hidden': isNavHidden(item.path)
                 }"
                 @mousedown="onNavMouseDown(item.path, $event)"
                 @mousemove="onNavMouseMove(item.path, $event)"
@@ -780,6 +821,13 @@ onMounted(load);
                 <el-icon class="nav-drag-icon"><Rank /></el-icon>
                 <el-icon class="nav-menu-icon"><component :is="item.icon" /></el-icon>
                 <span class="nav-menu-label">{{ item.label }}</span>
+                <el-switch
+                  :model-value="!isNavHidden(item.path)"
+                  @change="toggleNavHidden(item.path)"
+                  size="small"
+                  class="nav-visibility-switch"
+                  title="显示/隐藏此菜单项"
+                />
               </div>
             </div>
             <div class="nav-customize-hint">
@@ -944,7 +992,7 @@ onMounted(load);
 }
 .settings-header h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text);
 }
@@ -1008,7 +1056,7 @@ onMounted(load);
 /* ---------- 卡片 ---------- */
 .card {
   border-radius: 18px;
-  padding: 22px;
+  padding: 20px 22px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(16px);
@@ -1235,6 +1283,16 @@ onMounted(load);
   position: relative;
   overflow: hidden;
 }
+/* 2026 新主题预览色块（其余主题预览由 UI 设计师后续补齐） */
+.theme-preview[data-theme-preview='stardust'] {
+  background: linear-gradient(160deg, #05070f 0%, #121a3c 70%, #4cc9ff 160%);
+}
+.theme-preview[data-theme-preview='dawn'] {
+  background: linear-gradient(180deg, #fdf9f4 0%, #f2e8dc 60%, #e8823c 200%);
+}
+.theme-preview[data-theme-preview='flow'] {
+  background: linear-gradient(135deg, #0c0c14 0%, #a78bfa 90%, #22d3ee 180%);
+}
 .theme-name {
   font-size: 14px;
   font-weight: 600;
@@ -1320,6 +1378,17 @@ onMounted(load);
   font-size: 14px;
   color: var(--text);
 }
+.nav-customize-item.nav-hidden {
+  opacity: 0.5;
+  background: rgba(0, 0, 0, 0.08);
+}
+.nav-customize-item.nav-hidden .nav-menu-icon,
+.nav-customize-item.nav-hidden .nav-menu-label {
+  text-decoration: line-through;
+}
+.nav-visibility-switch {
+  flex-shrink: 0;
+}
 .nav-customize-hint {
   display: flex;
   align-items: center;
@@ -1387,6 +1456,10 @@ onMounted(load);
   border-radius: 16px;
   position: sticky;
   bottom: 12px;
+}
+.save-bar:hover {
+  transform: none;
+  box-shadow: var(--shadow);
 }
 .save-hint {
   font-size: 13px;

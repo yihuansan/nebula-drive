@@ -15,3 +15,5 @@ unpackage/
 src-tauri/target/
 .vite/
 nebula-drive-v*.zip
+backup-web-src-20260822/
+.data-test/

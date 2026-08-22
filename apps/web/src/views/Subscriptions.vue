@@ -8,6 +8,14 @@ const subscriptions = ref<any[]>([]);
 const transferHistory = ref<any[]>([]);
 const activeTab = ref('subscriptions');
 
+// 转存分享对话框
+const transferDialog = ref(false);
+const transferUrl = ref('');
+const transferDest = ref('/');
+const transferBusy = ref(false);
+const transferResult = ref<any | null>(null);
+const transferError = ref('');
+
 onMounted(async () => {
   await load();
 });
@@ -28,23 +36,57 @@ async function load() {
   }
 }
 
-async function doTransfer() {
+function openTransfer() {
+  transferUrl.value = '';
+  transferDest.value = '/';
+  transferResult.value = null;
+  transferError.value = '';
+  transferDialog.value = true;
+}
+
+function validateUrl(url: string): boolean {
   try {
-    const url = window.prompt('请输入分享链接：');
-    if (!url) return;
-    const r = await api('/transfers', {
-      method: 'POST',
-      body: JSON.stringify({ shareUrl: url }),
-    });
-    ElMessage.success(`转存成功：${r.transferred} 个文件`);
-    await load();
-  } catch (e: any) {
-    ElMessage.error(e.message || '转存失败');
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
+async function doTransfer() {
+  const url = transferUrl.value.trim();
+  if (!url) {
+    transferError.value = '请输入分享链接';
+    return;
+  }
+  if (!validateUrl(url)) {
+    transferError.value = '分享链接格式不正确，请输入有效的 URL（需以 http:// 或 https:// 开头）';
+    return;
+  }
+  transferBusy.value = true;
+  transferError.value = '';
+  try {
+    const r = await api('/transfers', {
+      method: 'POST',
+      body: JSON.stringify({ shareUrl: url, destPath: transferDest.value }),
+    });
+    transferResult.value = r;
+    ElMessage.success(r.message || `转存成功：${r.transferred ?? 0} 个文件`);
+    await load();
+  } catch (e: any) {
+    transferError.value = e.message || '转存失败';
+  } finally {
+    transferBusy.value = false;
+  }
+}
+
+function closeTransfer() {
+  transferDialog.value = false;
+}
+
+// SQLite datetime('now') 为 UTC（"YYYY-MM-DD HH:MM:SS" 格式），需按 UTC 解析
 function fmtTime(ts: string) {
-  return new Date(ts).toLocaleString('zh-CN');
+  return new Date(ts.replace(' ', 'T') + 'Z').toLocaleString('zh-CN');
 }
 </script>
 
@@ -52,7 +94,7 @@ function fmtTime(ts: string) {
   <div class="subs-page">
     <div class="page-header glass">
       <h2>转存和订阅</h2>
-      <el-button type="primary" @click="doTransfer">
+      <el-button type="primary" @click="openTransfer">
         <el-icon><Download /></el-icon>&nbsp;转存分享
       </el-button>
     </div>
@@ -91,6 +133,27 @@ function fmtTime(ts: string) {
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <!-- 转存分享对话框 -->
+    <el-dialog v-model="transferDialog" title="转存分享" width="480px">
+      <div class="form-tip">输入分享链接，将其中的文件转存到您的网盘</div>
+      <div class="transfer-form">
+        <div class="form-label">分享链接</div>
+        <el-input v-model="transferUrl" placeholder="https://example.com/s/xxxx" @keyup.enter="doTransfer" />
+        <div class="form-label" style="margin-top: 12px">目标目录</div>
+        <el-input v-model="transferDest" placeholder="/" />
+      </div>
+      <div v-if="transferError" class="form-tip error" style="margin-top: 12px">{{ transferError }}</div>
+      <div v-if="transferResult" class="form-tip success" style="margin-top: 12px">
+        {{ transferResult.message || `转存成功：${transferResult.transferred ?? 0} 个文件` }}
+      </div>
+      <template #footer>
+        <el-button @click="closeTransfer">关闭</el-button>
+        <el-button type="primary" :loading="transferBusy" @click="doTransfer">
+          开始转存
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -125,4 +188,9 @@ function fmtTime(ts: string) {
 }
 .sub-meta, .transfer-meta { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 .empty { text-align: center; padding: 60px; color: var(--text-secondary); }
+.transfer-form { margin-top: 12px; }
+.form-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.form-tip { font-size: 13px; color: var(--text-secondary); }
+.form-tip.success { color: #16a34a; }
+.form-tip.error { color: #dc2626; }
 </style>

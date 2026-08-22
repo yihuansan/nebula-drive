@@ -1,12 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../db/index.js';
-import { requirePermission, ok, fail } from '../auth/middleware.js';
+import { authMiddleware, requirePermission, ok, fail } from '../auth/middleware.js';
 import { createDriver, invalidateDriver, STORAGE_TYPES } from '../storage/registry.js';
 import { opLog } from '../services/log.service.js';
 
 export async function storageRoutes(app: FastifyInstance) {
-  app.get('/storages', { preHandler: requirePermission('storages:view') }, async (req, reply) => {
+  // 任何登录用户可列出存储（admin 看全部，普通用户仅看已启用的），供文件页/最近/快捷访问选择器使用
+  app.get('/storages', { preHandler: authMiddleware }, async (req, reply) => {
     const db = getDb();
+    const query = req.query as Record<string, string>;
+    const fast = query.fast === '1'; // fast=1 时跳过用量计算，快速返回
     const rows =
       req.user!.role === 'admin'
         ? (db.prepare('SELECT * FROM storages ORDER BY sort, id').all() as any[])
@@ -21,13 +24,18 @@ export async function storageRoutes(app: FastifyInstance) {
         sort: r.sort,
         config: JSON.parse(r.config || '{}'),
       };
-      // 计算实际用量
-      try {
-        const driver = createDriver({ ...r, config: JSON.parse(r.config || '{}') });
-        const usage = await driver.usage();
-        storage.used = usage.used;
-        storage.files = usage.files;
-      } catch {
+      // 计算实际用量（fast 模式跳过）
+      if (!fast) {
+        try {
+          const driver = createDriver({ ...r, config: JSON.parse(r.config || '{}') });
+          const usage = await driver.usage();
+          storage.used = usage.used;
+          storage.files = usage.files;
+        } catch {
+          storage.used = 0;
+          storage.files = 0;
+        }
+      } else {
         storage.used = 0;
         storage.files = 0;
       }

@@ -8,6 +8,10 @@ export const THEMES = {
   'dashboard': { label: '仪表盘', icon: '📊', isGlass: true, layout: 'dashboard' },
   'bento': { label: '便当盒', icon: '▦', isGlass: true, layout: 'bento' },
   'command': { label: '命令式', icon: '⌘', isGlass: false, layout: 'command' },
+  /* 2026 创意新主题（创意设计师产出） */
+  'stardust': { label: '星尘', icon: '✨', isGlass: true, layout: 'sidebar' },
+  'dawn': { label: '晨曦', icon: '🌅', isGlass: false, layout: 'sidebar' },
+  'flow': { label: '流光', icon: '🌌', isGlass: true, layout: 'sidebar' },
 } as const;
 
 export type ThemeKey = keyof typeof THEMES;

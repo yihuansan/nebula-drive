@@ -34,8 +34,8 @@ async function load() {
 
 async function togglePin(row: any) {
   try {
-    await api(`/files/quick-access/${encodeURIComponent(row.path)}`, { method: 'POST' });
-    ElMessage.success('已更新');
+    await api(`/files/quick-access/${encodeURIComponent(row.path)}?storageId=${storageId.value}`, { method: 'POST' });
+    ElMessage.success('已取消固定');
     await load();
   } catch (e: any) {
     ElMessage.error(e.message || '操作失败');
@@ -67,13 +67,13 @@ function fmtSize(bytes: number) {
         </el-icon>
         <div class="quick-name">{{ row.name }}</div>
         <div class="quick-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
-        <el-button size="small" @click="togglePin(row)">
-          <el-icon><StarFilled v-if="row.pinned" /><Star v-else /></el-icon>
+        <el-button size="small" title="取消固定" @click="togglePin(row)">
+          <el-icon><StarFilled /></el-icon>
         </el-button>
       </div>
       <div v-if="!loading && !entries.length" class="empty">
         <p>暂无快捷访问项</p>
-        <p class="tip">在文件管理中点击星标图标即可添加</p>
+        <p class="tip">在「文件管理」中右键点击文件或文件夹，选择「添加到快捷访问」即可</p>
       </div>
     </div>
   </div>

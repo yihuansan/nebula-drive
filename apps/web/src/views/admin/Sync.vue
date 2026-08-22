@@ -415,7 +415,7 @@ onMounted(load);
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 48px 0;
+  padding: 60px;
   color: var(--text-secondary);
 }
 .empty-icon {

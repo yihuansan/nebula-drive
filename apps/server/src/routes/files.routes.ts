@@ -18,10 +18,18 @@ async function previewAuth(req: FastifyRequest, reply: FastifyReply) {
     const q = req.query as { token?: string };
     if (q.token) token = q.token;
   }
-  if (!token) return reply.code(401).send({ error: '未登录' });
+  if (!token) return reply.code(401).header('Cache-Control', 'no-store').send({ error: '未登录' });
   const payload = verifyJwt(token, jwtSecret);
-  if (!payload) return reply.code(401).send({ error: '登录已过期，请重新登录' });
+  if (!payload) return reply.code(401).header('Cache-Control', 'no-store').send({ error: '登录已过期，请重新登录' });
   req.user = payload;
+}
+
+/** 将相对路径安全解析到 storageRoot 内；越界返回 null（防路径穿越） */
+function safeStoragePath(rel: string): string | null {
+  const root = path.resolve(dirs.storageRoot);
+  const full = path.resolve(root, rel.replace(/^\//, ''));
+  if (full !== root && !full.startsWith(root + path.sep)) return null;
+  return full;
 }
 
 export async function fileRoutes(app: FastifyInstance) {
@@ -135,6 +143,22 @@ export async function fileRoutes(app: FastifyInstance) {
       const driver = getDriver(rec);
       const st = await driver.stat(p);
       if (!st || st.isDir) return fail(reply, 404, '文件不存在');
+      
+      // 记录访问历史
+      try {
+        const db = getDb();
+        const userId = req.user ? (req.user as any).sub : null;
+        if (userId) {
+          const name = p.split('/').pop() || 'file';
+          db.prepare(
+            'INSERT INTO recent_access (user_id, storage_id, path, name, is_dir, accessed_at) VALUES (?, ?, ?, ?, 0, datetime(\'now\')) ' +
+            'ON CONFLICT (user_id, storage_id, path) DO UPDATE SET accessed_at = datetime(\'now\'), name = excluded.name'
+          ).run(userId, storageId, p, name);
+        }
+      } catch {
+        // 记录失败不影响下载
+      }
+      
       const stream = await driver.download(p);
       const name = p.split('/').filter(Boolean).pop() || 'download';
       reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
@@ -155,6 +179,22 @@ export async function fileRoutes(app: FastifyInstance) {
       const driver = getDriver(rec);
       const st = await driver.stat(p);
       if (!st || st.isDir) return fail(reply, 404, '文件不存在');
+      
+      // 记录访问历史
+      try {
+        const db = getDb();
+        const userId = req.user ? (req.user as any).sub : null;
+        if (userId) {
+          const name = p.split('/').pop() || 'file';
+          db.prepare(
+            'INSERT INTO recent_access (user_id, storage_id, path, name, is_dir, accessed_at) VALUES (?, ?, ?, ?, 0, datetime(\'now\')) ' +
+            'ON CONFLICT (user_id, storage_id, path) DO UPDATE SET accessed_at = datetime(\'now\'), name = excluded.name'
+          ).run(userId, storageId, p, name);
+        }
+      } catch {
+        // 记录失败不影响预览
+      }
+      
       const total = st.size;
       // 解析 Range 头：本地存储支持范围读取，用于视频在线播放拖动
       const isLocal = rec.type === 'local';
@@ -256,7 +296,8 @@ export async function fileRoutes(app: FastifyInstance) {
       }
     }
     for (const p of b.paths) {
-      const fullPath = path.join(dirs.storageRoot, p.replace(/^\//, ''));
+      const fullPath = safeStoragePath(p);
+      if (!fullPath) continue; // 路径穿越尝试：跳过
       if (!fs.existsSync(fullPath)) continue;
       const stat = fs.statSync(fullPath);
       const zipBase = p.replace(/^\//, '').split('/').pop() || p;
@@ -305,7 +346,8 @@ export async function fileRoutes(app: FastifyInstance) {
       }
     }
     for (const p of b.paths) {
-      const fullPath = path.join(dirs.storageRoot, p.replace(/^\//, ''));
+      const fullPath = safeStoragePath(p);
+      if (!fullPath) continue; // 路径穿越尝试：跳过
       if (!fs.existsSync(fullPath)) continue;
       const stat = fs.statSync(fullPath);
       const zipBase = p.replace(/^\//, '').split('/').pop() || p;
@@ -328,14 +370,20 @@ export async function fileRoutes(app: FastifyInstance) {
     const rec = getStorageRecord(storageId);
     if (!rec) return fail(reply, 404, '存储不存在');
 
-    const zipFullPath = path.join(dirs.storageRoot, b.path.replace(/^\//, ''));
+    const zipFullPath = safeStoragePath(b.path);
+    if (!zipFullPath) return fail(reply, 400, '非法路径');
     if (!fs.existsSync(zipFullPath)) return fail(reply, 404, 'zip 文件不存在');
     if (!fs.statSync(zipFullPath).isFile()) return fail(reply, 400, '不是文件');
 
     // 默认解压到 zip 文件所在目录
-    const destDir = b.destPath
-      ? path.join(dirs.storageRoot, b.destPath.replace(/^\//, ''))
-      : path.dirname(zipFullPath);
+    let destDir: string;
+    if (b.destPath) {
+      const d = safeStoragePath(b.destPath);
+      if (!d) return fail(reply, 400, '非法目标目录');
+      destDir = d;
+    } else {
+      destDir = path.dirname(zipFullPath);
+    }
 
     try {
       const zip = new AdmZip(zipFullPath); // 读取 zip 文件
@@ -352,7 +400,8 @@ export async function fileRoutes(app: FastifyInstance) {
     const q = req.query as { storageId?: string };
     const storageId = Number(q.storageId);
     const filePath = decodeURIComponent((req.params as { path: string }).path);
-    const fullPath = path.join(dirs.storageRoot, filePath.replace(/^\//, ''));
+    const fullPath = safeStoragePath(filePath);
+    if (!fullPath) return fail(reply, 404, '非法路径');
     try {
       const stat = fs.statSync(fullPath);
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
@@ -392,7 +441,8 @@ export async function fileRoutes(app: FastifyInstance) {
     const rec = getStorageRecord(storageId);
     if (!rec) return fail(reply, 404, '存储不存在');
     const p = (req.params as any).path as string;
-    const fullPath = path.join(dirs.storageRoot, p.replace(/^\//, ''));
+    const fullPath = safeStoragePath(p);
+    if (!fullPath) return fail(reply, 404, '非法路径');
     if (!fs.existsSync(fullPath)) return fail(reply, 404, '文件不存在');
 
     const ext = path.extname(fullPath).replace('.', '').toLowerCase();

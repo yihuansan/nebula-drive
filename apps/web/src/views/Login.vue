@@ -101,6 +101,12 @@ async function loadBrand() {
 }
 onMounted(loadBrand);
 
+/* ---------- 2FA 相关 ---------- */
+const twoFaRequired = ref(false);
+const twoFaTempToken = ref('');
+const twoFaCode = ref('');
+const twoFaError = ref('');
+
 async function doLogin() {
   if (!username.value || !password.value) {
     ElMessage.warning('请输入用户名和密码');
@@ -122,6 +128,15 @@ async function doLogin() {
         captchaCode: captchaRequired.value ? captchaInput.value : undefined,
       }),
     });
+
+    // 检查是否需要 2FA
+    if (r.requiresTwoFactor) {
+      twoFaRequired.value = true;
+      twoFaTempToken.value = r.tempToken;
+      showRegister.value = false;
+      return;
+    }
+
     auth.token = r.token;
     auth.user = r.user;
     localStorage.setItem('nebula_token', r.token);
@@ -141,6 +156,33 @@ async function doLogin() {
     loading.value = false;
   }
 }
+
+async function doTwoFaLogin() {
+  if (!twoFaCode.value) {
+    ElMessage.warning('请输入 6 位验证码');
+    return;
+  }
+  loading.value = true;
+  twoFaError.value = '';
+  try {
+    const r = await api('/auth/login/2fa', {
+      method: 'POST',
+      body: JSON.stringify({
+        tempToken: twoFaTempToken.value,
+        code: twoFaCode.value,
+      }),
+    });
+    auth.token = r.token;
+    auth.user = r.user;
+    localStorage.setItem('nebula_token', r.token);
+    ElMessage.success('登录成功');
+    router.push('/');
+  } catch (e: any) {
+    twoFaError.value = e.message || '2FA 验证失败';
+  } finally {
+    loading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -152,8 +194,31 @@ async function doLogin() {
         <div class="brand-name">{{ brand.appName }}</div>
         <div class="brand-sub">{{ brand.aboutText || '多存储统一管理平台' }}</div>
       </div>
+      <!-- 2FA 验证步骤 -->
+      <el-form v-if="twoFaRequired && !showRegister" label-position="top" @submit.prevent="doTwoFaLogin">
+        <div class="twoFa-hint">
+          <el-icon color="var(--accent)" :size="20"><Lock /></el-icon>
+          <span>请输入 2FA 验证码</span>
+        </div>
+        <el-form-item label="验证码">
+          <el-input
+            v-model="twoFaCode"
+            placeholder="6 位验证码或恢复码"
+            maxlength="10"
+            @keyup.enter="doTwoFaLogin"
+          />
+        </el-form-item>
+        <div v-if="twoFaError" class="captcha-error">{{ twoFaError }}</div>
+        <el-button type="primary" class="login-btn" :loading="loading" @click="doTwoFaLogin">
+          验证并登录
+        </el-button>
+        <div class="register-link">
+          <a href="javascript:;" @click="twoFaRequired = false; twoFaCode = ''; twoFaError = ''">返回</a>
+        </div>
+      </el-form>
+
       <!-- 登录表单 -->
-      <el-form v-if="!showRegister" label-position="top" @submit.prevent="doLogin">
+      <el-form v-if="!twoFaRequired && !showRegister" label-position="top" @submit.prevent="doLogin">
         <el-form-item label="用户名">
           <el-input v-model="username" placeholder="请输入用户名" prefix-icon="User" clearable />
         </el-form-item>
@@ -191,7 +256,7 @@ async function doLogin() {
       </el-form>
 
       <!-- 注册表单 -->
-      <el-form v-else label-position="top" @submit.prevent="doRegister">
+      <el-form v-if="showRegister && !twoFaRequired" label-position="top" @submit.prevent="doRegister">
         <el-form-item label="用户名">
           <el-input v-model="regUsername" placeholder="3-32 位用户名" prefix-icon="User" clearable />
         </el-form-item>
@@ -380,5 +445,16 @@ async function doLogin() {
   font-size: 11px;
   color: var(--text-secondary);
   opacity: 0.7;
+}
+
+/* 2FA 样式 */
+.twoFa-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
 }
 </style>

@@ -35,17 +35,63 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     }
   });
 
-  // 最近访问文件（基于文件修改时间排序）
+  // 最近访问文件（基于真实访问历史）
   app.get('/files/recent', { preHandler: authMiddleware }, async (req, reply) => {
     const { storageId, limit = '50' } = req.query as Record<string, string>;
     if (!storageId) return fail(reply, 400, '缺少 storageId');
     try {
       const rec = getStorageRecord(Number(storageId));
       if (!rec) return fail(reply, 404, '存储不存在');
-      const { entries } = await fileService.list(Number(storageId), '/', 'mtime', 'desc');
-      return ok(reply, { entries: entries.slice(0, Number(limit)) });
+      const db = getDb();
+      const userId = req.user ? (req.user as any).sub : null;
+      
+      // 从 recent_access 表获取该用户的访问记录
+      const rows = db.prepare(
+        'SELECT * FROM recent_access WHERE user_id = ? AND storage_id = ? ORDER BY accessed_at DESC LIMIT ?'
+      ).all(userId, Number(storageId), Number(limit)) as any[];
+      
+      // 验证文件是否还存在，移除不存在的
+      const validEntries: any[] = [];
+      for (const row of rows) {
+        try {
+          const driver = getDriver(rec);
+          const stat = await driver.stat(row.path);
+          if (stat) {
+            validEntries.push({
+              path: row.path,
+              name: row.name,
+              isDir: row.is_dir === 1,
+              size: stat.size || 0,
+              mtime: stat.mtime || row.accessed_at,
+              accessed_at: row.accessed_at,
+            });
+          } else {
+            // 文件不存在，从记录中删除
+            db.prepare('DELETE FROM recent_access WHERE id = ?').run(row.id);
+          }
+        } catch {
+          // 文件不存在，从记录中删除
+          db.prepare('DELETE FROM recent_access WHERE id = ?').run(row.id);
+        }
+      }
+      
+      return ok(reply, { entries: validEntries });
     } catch (e: any) {
       return fail(reply, 500, e.message || '加载失败');
+    }
+  });
+
+  // 清空最近访问记录
+  app.delete('/files/recent', { preHandler: authMiddleware }, async (req, reply) => {
+    const { storageId } = req.query as Record<string, string>;
+    if (!storageId) return fail(reply, 400, '缺少 storageId');
+    try {
+      const db = getDb();
+      const userId = req.user ? (req.user as any).sub : null;
+      const info = db.prepare('DELETE FROM recent_access WHERE user_id = ? AND storage_id = ?').run(userId, Number(storageId));
+      return ok(reply, { deleted: info.changes });
+    } catch (e: any) {
+      return fail(reply, 500, e.message || '清空失败');
     }
   });
 
@@ -53,30 +99,64 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
   app.get('/files/quick-access', { preHandler: authMiddleware }, async (req, reply) => {
     const { storageId } = req.query as Record<string, string>;
     if (!storageId) return fail(reply, 400, '缺少 storageId');
+    const rec = getStorageRecord(Number(storageId));
+    if (!rec) return fail(reply, 404, '存储不存在');
     const db = getDb();
     const rows = db.prepare('SELECT * FROM quick_access WHERE storage_id = ? ORDER BY created_at DESC').all(Number(storageId)) as any[];
-    return ok(reply, { entries: rows });
+    const driver = getDriver(rec);
+    // 逐条映射为 camelCase + 实时 stat（size/isDir），失效项自动清理
+    const entries: any[] = [];
+    for (const row of rows) {
+      try {
+        const stat = await driver.stat(row.path);
+        if (stat) {
+          entries.push({
+            id: row.id,
+            path: row.path,
+            name: row.name,
+            isDir: row.is_dir === 1,
+            size: stat.size || 0,
+            createdAt: row.created_at,
+          });
+        } else {
+          db.prepare('DELETE FROM quick_access WHERE id = ?').run(row.id);
+        }
+      } catch {
+        db.prepare('DELETE FROM quick_access WHERE id = ?').run(row.id);
+      }
+    }
+    return ok(reply, { entries });
   });
 
   app.post('/files/quick-access/:path', { preHandler: authMiddleware }, async (req, reply) => {
     const { storageId } = req.query as Record<string, string>;
-    const { path } = req.params as Record<string, string>;
+    const { path: paramPath } = req.params as Record<string, string>;
     if (!storageId) return fail(reply, 400, '缺少 storageId');
+    const rec = getStorageRecord(Number(storageId));
+    if (!rec) return fail(reply, 404, '存储不存在');
     const db = getDb();
-    const decodedPath = decodeURIComponent(path);
+    // Fastify 已对 :path 参数解码一次，勿二次 decodeURIComponent（含 % 的文件名会 500）
+    const fullPath = paramPath.startsWith('/') ? paramPath : '/' + paramPath;
     // 检查是否已存在
-    const existing = db.prepare('SELECT * FROM quick_access WHERE storage_id = ? AND path = ?').get(Number(storageId), decodedPath) as any;
+    const existing = db.prepare('SELECT * FROM quick_access WHERE storage_id = ? AND path = ?').get(Number(storageId), fullPath) as any;
     if (existing) {
       // 已存在则删除（取消固定）
       db.prepare('DELETE FROM quick_access WHERE id = ?').run(existing.id);
       return ok(reply, { action: 'removed' });
-    } else {
-      // 不存在则添加
-      db.prepare('INSERT INTO quick_access (storage_id, path, name, is_dir, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(
-        Number(storageId), decodedPath, decodedPath.split('/').pop(), 0
-      );
-      return ok(reply, { action: 'added' });
     }
+    // 不存在则添加（stat 一次，记录真实 is_dir）
+    let isDir = 0;
+    try {
+      const st = await getDriver(rec).stat(fullPath);
+      if (!st) return fail(reply, 404, '路径不存在');
+      isDir = st.isDir ? 1 : 0;
+    } catch {
+      // 无法 stat 时按文件记录
+    }
+    db.prepare('INSERT INTO quick_access (storage_id, path, name, is_dir, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(
+      Number(storageId), fullPath, fullPath.split('/').pop(), isDir
+    );
+    return ok(reply, { action: 'added' });
   });
 
   // 隐藏空间状态：是否已设置密码
@@ -139,27 +219,43 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     return ok(reply, { unlocked: true });
   });
 
-  // 订阅列表
+  // 订阅列表（仅当前用户）
   app.get('/subscriptions', { preHandler: authMiddleware }, async (req, reply) => {
     const db = getDb();
-    const rows = db.prepare('SELECT * FROM subscriptions ORDER BY created_at DESC').all() as any[];
-    return ok(reply, { subscriptions: rows });
+    const rows = db.prepare('SELECT * FROM subscriptions WHERE user_id = ? ORDER BY created_at DESC').all(req.user!.sub) as any[];
+    return ok(reply, {
+      subscriptions: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        sharer: r.sharer,
+        autoRefresh: r.auto_refresh === 1,
+        shareId: r.share_id,
+        createdAt: r.created_at,
+      })),
+    });
   });
 
-  // 转存记录
+  // 转存记录（仅当前用户）
   app.get('/transfers', { preHandler: authMiddleware }, async (req, reply) => {
     const db = getDb();
-    const rows = db.prepare('SELECT * FROM transfers ORDER BY created_at DESC').all() as any[];
-    return ok(reply, { transfers: rows });
+    const rows = db.prepare('SELECT * FROM transfers WHERE user_id = ? ORDER BY created_at DESC').all(req.user!.sub) as any[];
+    return ok(reply, {
+      transfers: rows.map((r) => ({
+        id: r.id,
+        shareUrl: r.share_url,
+        fileCount: r.file_count ?? 0,
+        createdAt: r.created_at,
+      })),
+    });
   });
 
   // 转存分享
   app.post('/transfers', { preHandler: authMiddleware }, async (req, reply) => {
     const { shareUrl } = req.body as { shareUrl?: string };
     if (!shareUrl) return fail(reply, 400, '请输入分享链接');
-    // 简化实现：只记录转存请求
+    // 简化实现：只记录转存请求（归属当前登录用户）
     const db = getDb();
-    db.prepare('INSERT INTO transfers (share_url, file_count, created_at) VALUES (?, ?, datetime(\'now\'))').run(shareUrl, 0);
+    db.prepare('INSERT INTO transfers (user_id, share_url, file_count, created_at) VALUES (?, ?, ?, datetime(\'now\'))').run(req.user!.sub, shareUrl, 0);
     return ok(reply, { transferred: 0, message: '转存请求已记录' });
   });
 }

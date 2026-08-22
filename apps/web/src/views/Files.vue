@@ -10,10 +10,67 @@ const storageId = ref(0);
 const path = ref('/');
 const entries = ref<any[]>([]);
 const loading = ref(false);
+const hasLoaded = ref(false);
 const selected = ref<any[]>([]);
 const tableRef = ref();
 const view = ref<'grid' | 'list' | 'photo'>('grid');
 const multiSelectMode = ref(false);
+
+/* ---------- 共享给用户功能 ---------- */
+const collabShareDialog = ref(false);
+const collabShareTarget = ref<any>(null);
+const collabShareForm = ref({
+  name: '',
+  usernames: '' as string,
+  permission: 'view' as 'view' | 'download' | 'manage',
+  expiresAt: '',
+});
+const collabShareLoading = ref(false);
+
+async function openCollabShareDialog(row: any) {
+  collabShareTarget.value = row;
+  collabShareForm.value = {
+    name: row.name,
+    usernames: '',
+    permission: 'view',
+    expiresAt: '',
+  };
+  collabShareDialog.value = true;
+}
+
+async function doCollabShare() {
+  if (!collabShareTarget.value) return;
+  const usernames = collabShareForm.value.usernames
+    .split(/[,，\s]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  
+  if (!usernames.length) {
+    ElMessage.warning('请输入至少一个用户名');
+    return;
+  }
+  collabShareLoading.value = true;
+  try {
+    await api('/share-collab', {
+      method: 'POST',
+      body: JSON.stringify({
+        storageId: storageId.value,
+        path: collabShareTarget.value.path,
+        name: collabShareForm.value.name,
+        isDir: collabShareTarget.value.isDir,
+        usernames,
+        permission: collabShareForm.value.permission,
+        expiresAt: collabShareForm.value.expiresAt || null,
+      }),
+    });
+    ElMessage.success('共享已创建');
+    collabShareDialog.value = false;
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建共享失败');
+  } finally {
+    collabShareLoading.value = false;
+  }
+}
 
 // 布局类型（根据主题决定）
 const { theme } = useTheme();
@@ -28,6 +85,8 @@ const statCards = computed(() => [
   { id: 'files', icon: 'Document', iconClass: 'si-green', label: '文件', value: entries.value.filter(e => !e.isDir).length },
   { id: 'size', icon: 'DataLine', iconClass: 'si-purple', label: '总大小', value: fmtSize(entries.value.reduce((sum, e) => sum + (e.size || 0), 0)) },
 ]);
+
+
 
 /* ---------- 标签系统 ---------- */
 const allTags = ref<string[]>([]);
@@ -160,6 +219,7 @@ function ctxAction(cmd: string) {
     case 'decompress': doDecompress(row); break;
     case 'compress': doCompressSingle(row); break;
     case 'share': openShare(row); break;
+    case 'collab-share': openCollabShareDialog(row); break;
     case 'rename': openRename(row); break;
     case 'move': openMove(row, 'move'); break;
     case 'copy': openMove(row, 'copy'); break;
@@ -254,6 +314,25 @@ function fileType(name: string, isDir: boolean) {
 const sortKey = ref<'name' | 'size' | 'mtime'>('name');
 const sortOrder = ref<'asc' | 'desc'>('asc');
 
+/* ---------- 工具栏：搜索框 + 更多菜单（低频操作收纳） ---------- */
+function runSearchFromBox() {
+  searchDialog.value = true;
+  doSearch();
+}
+function handleToolbarMore(cmd: string) {
+  switch (cmd) {
+    case 'refresh': load(); break;
+    case 'sort-name': sortKey.value = 'name'; load(); break;
+    case 'sort-size': sortKey.value = 'size'; load(); break;
+    case 'sort-mtime': sortKey.value = 'mtime'; load(); break;
+    case 'tag-filter': tagFilterDialog.value = true; break;
+    case 'multi-select':
+      multiSelectMode.value = !multiSelectMode.value;
+      if (!multiSelectMode.value) selected.value = [];
+      break;
+  }
+}
+
 const parent = computed(() =>
   path.value === '/' ? null : path.value.replace(/\/[^/]*\/?$/, '') || '/'
 );
@@ -272,7 +351,8 @@ const crumbs = computed(() => {
 
 async function loadStorages() {
   try {
-    const r = await api('/storages');
+    // fast=1 跳过用量计算，快速返回存储列表
+    const r = await api('/storages?fast=1');
     storages.value = r.storages;
     if (!storageId.value && r.storages.length) {
       storageId.value = r.storages[0].id;
@@ -287,6 +367,7 @@ async function load() {
   // 如果正在按标签筛选，加载标签文件
   if (activeTagFilter.value) {
     await loadTagFiles();
+    hasLoaded.value = true;
     return;
   }
   loading.value = true;
@@ -299,6 +380,7 @@ async function load() {
     ElMessage.error(e.message || '加载目录失败');
   } finally {
     loading.value = false;
+    hasLoaded.value = true;
   }
 }
 
@@ -355,12 +437,49 @@ async function toggleStar(row: any) {
   }
 }
 
+/* ---------- 快捷访问（固定文件） ---------- */
+const quickAccessSet = ref<Set<string>>(new Set());
+function qaKey(row: any) {
+  return storageId.value + '||' + row.path;
+}
+function isQuickAccess(row: any) {
+  return quickAccessSet.value.has(qaKey(row));
+}
+async function loadQuickAccess() {
+  try {
+    const r = await api(`/files/quick-access?storageId=${storageId.value}`);
+    const set = new Set<string>();
+    for (const e of r.entries) set.add(storageId.value + '||' + e.path);
+    quickAccessSet.value = set;
+  } catch { /* ignore */ }
+}
+async function toggleQuickAccess(row: any) {
+  const key = qaKey(row);
+  const added = quickAccessSet.value.has(key);
+  try {
+    const r = await api(`/files/quick-access/${encodeURIComponent(row.path)}?storageId=${storageId.value}`, { method: 'POST' });
+    if (r.action === 'added') {
+      quickAccessSet.value.add(key);
+      ElMessage.success('已添加到快捷访问');
+    } else {
+      quickAccessSet.value.delete(key);
+      ElMessage.success('已从快捷访问移除');
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '操作失败');
+  }
+}
+
 /** 更多菜单命令分发 */
 function handleMoreCmd(cmd: string, row: any) {
   switch (cmd) {
+    case 'star': toggleStar(row); break;
+    case 'quick-access': toggleQuickAccess(row); break;
     case 'share': openShare(row); break;
     case 'rename': openRename(row); break;
     case 'props': openProps(row); break;
+    case 'archive': openArchivePreview(row); break;
+    case 'decompress': doDecompress(row); break;
     case 'move': openMove(row, 'move'); break;
     case 'copy': openMove(row, 'copy'); break;
   }
@@ -701,42 +820,40 @@ async function openPreview(row: any) {
   if (row.isDir) return;
   const kind = isVideo(row.name) ? 'video' : isAudio(row.name) ? 'audio' : isPdf(row.name) ? 'pdf' : isImage(row.name) ? 'image' : isCode(row.name) ? 'code' : null;
   if (!kind) return download(row);
+  
   previewName.value = row.name;
-  previewPath.value = row.path;  // 保存完整路径
+  previewPath.value = row.path;
   previewSize.value = row.size || 0;
   previewKind.value = kind;
   previewDialog.value = true;
   previewLoading.value = true;
   previewUrl.value = '';
   previewCode.value = '';
-  // 重置图片状态
   imgScale.value = 1;
   imgRotation.value = 0;
   imgFit.value = 'fit-width';
   isFullscreen.value = false;
   imgInfo.value = null;
+  
   try {
     const token = localStorage.getItem('nebula_token') || '';
     const base = `/api/v1/files/preview?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
+    
     if (previewKind.value === 'image' || previewKind.value === 'pdf' || previewKind.value === 'code') {
-      // 图片 / PDF / 代码：带 Bearer 头拉取 blob
       const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('预览加载失败');
       if (previewKind.value === 'code') {
-        // 代码文件：读取文本内容
         const text = await res.text();
         previewCode.value = text.length > 50000 ? text.slice(0, 50000) + '\n... (内容过长，仅显示前 50KB)' : text;
         previewUrl.value = 'code-loaded';
       } else {
         const blob = await res.blob();
         previewUrl.value = URL.createObjectURL(blob);
-        // 加载图片信息
         if (previewKind.value === 'image') {
           loadImgInfo(previewUrl.value);
         }
       }
     } else {
-      // 视频 / 音频：用 Bearer 头获取 blob（认证可靠）
       const res = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('预览加载失败');
       const blob = await res.blob();
@@ -1092,15 +1209,28 @@ function photoUrl(row: any) {
 
 const route = useRoute();
 onMounted(async () => {
-  await loadStorages();
-  await loadAllTags();
-  await loadFavorites();
+  // 立即加载文件（使用默认存储 ID），存储列表在后台加载
   // 深链：从收藏页等跳转携带 storage/path 参数时，定位到指定位置
   const qStorage = route.query.storage ? Number(route.query.storage) : null;
   const qPath = route.query.path ? String(route.query.path) : null;
-  if (qStorage && storages.value.some((s: any) => s.id === qStorage)) storageId.value = qStorage;
+  if (qStorage) storageId.value = qStorage;
+  else if (!storageId.value) storageId.value = 1; // 默认存储
   if (qPath) path.value = qPath;
-  if (storageId.value) load();
+  // 文件列表立即加载
+  load();
+  // 存储列表和标签在后台加载，不阻塞文件显示
+  loadStorages().then(() => {
+    // 存储列表加载完成后，如果当前存储 ID 无效则切换到第一个
+    if (!storages.value.some((s: any) => s.id === storageId.value)) {
+      if (storages.value.length) {
+        storageId.value = storages.value[0].id;
+        load();
+      }
+    }
+  });
+  loadAllTags();
+  loadFavorites();
+  loadQuickAccess();
 });
 </script>
 
@@ -1138,20 +1268,19 @@ onMounted(async () => {
           </el-breadcrumb-item>
         </el-breadcrumb>
         <div class="spacer" />
-        <!-- 排序：字段 + 升降序 -->
-        <el-select v-model="sortKey" size="small" class="sort-select" @change="load">
-          <el-option label="按名称" value="name" />
-          <el-option label="按大小" value="size" />
-          <el-option label="按时间" value="mtime" />
-        </el-select>
-        <button class="sort-order-btn glass-btn" :title="sortOrder === 'asc' ? '当前升序，点击切换降序' : '当前降序，点击切换升序'" @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'; load()">
-          <el-icon><ArrowUp v-if="sortOrder === 'asc'" /><ArrowDown v-else /></el-icon>
-        </button>
-        <!-- 标签筛选 -->
-        <el-select v-if="activeTagFilter" v-model="activeTagFilter" size="small" class="tag-select" clearable placeholder="按标签筛选" @change="load">
-          <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
-        </el-select>
-        <el-button v-if="!activeTagFilter" size="small" @click="tagFilterDialog = true"><el-icon><PriceTag /></el-icon>&nbsp;标签筛选</el-button>
+        <!-- 全局搜索（常驻搜索框，回车或点击图标触发） -->
+        <div class="toolbar-search glass">
+          <el-icon class="toolbar-search-icon"><Search /></el-icon>
+          <input
+            v-model="searchQ"
+            class="toolbar-search-input"
+            placeholder="搜索文件…"
+            @keyup.enter="runSearchFromBox"
+          />
+          <button class="toolbar-search-btn" title="搜索" @click="runSearchFromBox">
+            <el-icon><Search /></el-icon>
+          </button>
+        </div>
         <!-- 视图切换：网格 / 列表 / 照片 -->
         <div class="view-toggle glass-btn">
           <button class="vt-btn" :class="{ active: view === 'grid' }" title="网格视图" @click="view = 'grid'">
@@ -1164,17 +1293,25 @@ onMounted(async () => {
             <el-icon><PictureFilled /></el-icon>
           </button>
         </div>
-        <el-button size="small" @click="load"><el-icon><Refresh /></el-icon>&nbsp;刷新</el-button>
-        <el-button size="small" @click="searchDialog = true"><el-icon><Search /></el-icon>&nbsp;搜索</el-button>
         <el-button size="small" @click="mkdirDialog = true; mkdirName = ''"><el-icon><FolderAdd /></el-icon>&nbsp;新建文件夹</el-button>
         <el-button size="small" type="primary" @click="pickFiles"><el-icon><Upload /></el-icon>&nbsp;上传文件</el-button>
-        <el-button
-          size="small"
-          :type="multiSelectMode ? 'warning' : 'default'"
-          @click="multiSelectMode = !multiSelectMode; if (!multiSelectMode) selected = []"
-        >
-          <el-icon><Check /></el-icon>&nbsp;{{ multiSelectMode ? '退出多选' : '多选模式' }}
-        </el-button>
+        <!-- 更多：低频操作收纳（排序 / 标签 / 刷新 / 多选） -->
+        <el-dropdown trigger="click" @command="handleToolbarMore">
+          <el-button size="small" :type="multiSelectMode ? 'warning' : 'default'">
+            <el-icon><MoreFilled /></el-icon>&nbsp;更多
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="sort-name" :disabled="sortKey === 'name'">按名称排序</el-dropdown-item>
+              <el-dropdown-item command="sort-size" :disabled="sortKey === 'size'">按大小排序</el-dropdown-item>
+              <el-dropdown-item command="sort-mtime" :disabled="sortKey === 'mtime'">按时间排序</el-dropdown-item>
+              <el-dropdown-item command="tag-filter"><el-icon><PriceTag /></el-icon> 标签筛选</el-dropdown-item>
+              <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon> 刷新</el-dropdown-item>
+              <el-dropdown-item command="multi-select"><el-icon><Check /></el-icon> {{ multiSelectMode ? '退出多选' : '多选模式' }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <!-- 多选模式批量操作 -->
         <el-button v-if="multiSelectMode" size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
           <el-icon><Delete /></el-icon>&nbsp;删除选中
         </el-button>
@@ -1194,11 +1331,21 @@ onMounted(async () => {
       </div>
 
       <!-- 网格视图（毛玻璃卡片 + 悬浮微动画） -->
-      <div v-if="view === 'grid'" v-loading="loading" class="file-grid">
+      <div v-if="view === 'grid'" class="file-grid">
+        <!-- 骨架屏：首次加载时显示 -->
+        <template v-if="!hasLoaded">
+          <div v-for="i in 8" :key="'sk-' + i" class="file-card glass-card skeleton-card">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-name"></div>
+            <div class="skeleton-meta"></div>
+          </div>
+        </template>
+        <!-- 真实文件：带淡入动画 -->
+        <template v-else>
         <div
           v-for="row in entries"
           :key="row.path"
-          class="file-card glass-card"
+          class="file-card glass-card file-fade-in"
           :class="{ selected: isSelected(row) }"
           @click="onCardClick(row)"
           @contextmenu="showContextMenu($event, row)"
@@ -1218,53 +1365,70 @@ onMounted(async () => {
           <div class="fc-name" :title="row.name">{{ row.name }}</div>
           <div class="fc-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
           <div class="fc-actions" @click.stop>
-            <!-- 收藏星标（文件/文件夹均可） -->
-            <el-tooltip :content="isStarred(row) ? '取消收藏' : '收藏'" placement="top" :show-after="300">
-              <el-button link @click="toggleStar(row)"><el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon></el-button>
-            </el-tooltip>
-            <!-- 文件夹：保持原有操作 -->
+            <!-- 统一按钮顺序：核心操作 → 删除 → 三个点菜单 -->
+            <!-- 文件夹：分享 → 重命名 → 删除 → 三个点 -->
             <template v-if="row.isDir">
-              <el-tooltip content="分享" placement="top" :show-after="300">
+              <el-tooltip content="分享" placement="top">
                 <el-button link @click="openShare(row)"><el-icon><Share /></el-icon></el-button>
               </el-tooltip>
-              <el-tooltip content="重命名" placement="top" :show-after="300">
+              <el-tooltip content="重命名" placement="top">
                 <el-button link @click="openRename(row)"><el-icon><EditPen /></el-icon></el-button>
               </el-tooltip>
-              <el-tooltip content="删除" placement="top" :show-after="300">
-                <el-button link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></el-button>
-              </el-tooltip>
-            </template>
-            <!-- 文件：核心操作 + 更多菜单 -->
-            <template v-else>
-              <el-tooltip v-if="isPreviewable(row.name)" content="预览" placement="top" :show-after="300">
-                <el-button link @click="openPreview(row)"><el-icon><View /></el-icon></el-button>
-              </el-tooltip>
-              <el-tooltip content="下载" placement="top" :show-after="300">
-                <el-button link @click="download(row)"><el-icon><Download /></el-icon></el-button>
-              </el-tooltip>
-              <el-tooltip v-if="isArchive(row.name)" content="压缩包内容" placement="top" :show-after="300">
-                <el-button link @click="openArchivePreview(row)"><el-icon><Files /></el-icon></el-button>
-              </el-tooltip>
-              <el-tooltip v-if="row.name.toLowerCase().endsWith('.zip')" content="解压到当前目录" placement="top" :show-after="300">
-                <el-button link @click="doDecompress(row)"><el-icon><Box /></el-icon></el-button>
-              </el-tooltip>
-              <el-tooltip content="删除" placement="top" :show-after="300">
+              <el-tooltip content="删除" placement="top">
                 <el-button link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></el-button>
               </el-tooltip>
               <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
                 <el-button link class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="star">
+                      <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>
+                      {{ isStarred(row) ? '取消收藏' : '收藏' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item command="quick-access">
+                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+            <!-- 文件：预览 → 下载 → 删除 → 三个点 -->
+            <template v-else>
+              <el-tooltip v-if="isPreviewable(row.name)" content="预览" placement="top">
+                <el-button link @click="openPreview(row)"><el-icon><View /></el-icon></el-button>
+              </el-tooltip>
+              <el-tooltip content="下载" placement="top">
+                <el-button link @click="download(row)"><el-icon><Download /></el-icon></el-button>
+              </el-tooltip>
+              <el-tooltip content="删除" placement="top">
+                <el-button link type="danger" @click="doDelete(row)"><el-icon><Delete /></el-icon></el-button>
+              </el-tooltip>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
+                <el-button link class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="star">
+                      <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>
+                      {{ isStarred(row) ? '取消收藏' : '收藏' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item command="quick-access">
+                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                    </el-dropdown-item>
                     <el-dropdown-item command="share"><el-icon><Share /></el-icon>分享</el-dropdown-item>
                     <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
                     <el-dropdown-item command="props"><el-icon><InfoFilled /></el-icon>属性</el-dropdown-item>
+                    <el-dropdown-item v-if="isArchive(row.name)" command="archive"><el-icon><Files /></el-icon>压缩包内容</el-dropdown-item>
+                    <el-dropdown-item v-if="row.name.toLowerCase().endsWith('.zip')" command="decompress"><el-icon><Box /></el-icon>解压</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
             </template>
           </div>
         </div>
-        <div v-if="!loading && !entries.length" class="empty">此文件夹为空</div>
+        </template>
+        <div v-if="hasLoaded && !loading && !entries.length" class="empty">此文件夹为空</div>
       </div>
 
       <!-- 列表视图 -->
@@ -1305,6 +1469,21 @@ onMounted(async () => {
               <el-button link type="primary" size="small" @click.stop="openMove(row, 'move')">移动</el-button>
               <el-button link type="primary" size="small" @click.stop="openMove(row, 'copy')">复制</el-button>
               <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
+                <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="star">
+                      <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>
+                      {{ isStarred(row) ? '取消收藏' : '收藏' }}
+                    </el-dropdown-item>
+                    <el-dropdown-item command="quick-access">
+                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </template>
             <!-- 文件：核心操作 + 更多菜单 -->
             <div v-else class="row-actions">
@@ -1321,6 +1500,10 @@ onMounted(async () => {
                     <el-dropdown-item command="move">移动</el-dropdown-item>
                     <el-dropdown-item command="copy">复制</el-dropdown-item>
                     <el-dropdown-item command="props">属性</el-dropdown-item>
+                    <el-dropdown-item command="quick-access">
+                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                    </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -1340,11 +1523,47 @@ onMounted(async () => {
           <img :src="photoUrl(row)" :alt="row.name" loading="lazy" />
           <div class="photo-overlay">{{ row.name }}</div>
         </div>
-        <div v-if="!loading && !photoEntries.length" class="empty">此文件夹没有图片文件</div>
+        <div v-if="hasLoaded && !loading && !photoEntries.length" class="empty">此文件夹没有图片文件</div>
       </div>
     </div>
 
     <!-- 新建文件夹 -->
+    <!-- 共享给用户对话框 -->
+    <el-dialog v-model="collabShareDialog" title="共享给用户" width="560px">
+      <el-form label-width="100px">
+        <el-form-item label="名称">
+          <el-input v-model="collabShareForm.name" placeholder="共享名称" />
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input
+            v-model="collabShareForm.usernames"
+            placeholder="输入用户名，多个用户用逗号分隔"
+          />
+          <p class="collab-hint">输入要共享的用户名，例如：zhangsan, lisi</p>
+        </el-form-item>
+        <el-form-item label="权限">
+          <el-radio-group v-model="collabShareForm.permission">
+            <el-radio value="view">仅查看</el-radio>
+            <el-radio value="download">可查看+下载</el-radio>
+            <el-radio value="manage">可管理</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="有效期">
+          <el-date-picker
+            v-model="collabShareForm.expiresAt"
+            type="date"
+            placeholder="永久有效"
+            style="width: 100%"
+            value-format="YYYY-MM-DD"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="collabShareDialog = false">取消</el-button>
+        <el-button type="primary" :loading="collabShareLoading" @click="doCollabShare">确认共享</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="mkdirDialog" title="新建文件夹" width="420px">
       <el-input v-model="mkdirName" placeholder="文件夹名称" @keyup.enter="doMkdir" />
       <template #footer>
@@ -1684,6 +1903,7 @@ onMounted(async () => {
       </div>
     </el-dialog>
 
+    <!-- 加密对话框 -->
     <input ref="fileInput" type="file" multiple class="file-picker" @change="onPick" />
 
     <!-- 右键上下文菜单 -->
@@ -1697,6 +1917,10 @@ onMounted(async () => {
       <button class="ctx-item" @click.stop="toggleStar(contextMenu.target)">
         <el-icon><StarFilled v-if="isStarred(contextMenu.target)" /><Star v-else /></el-icon> {{ isStarred(contextMenu.target) ? '取消收藏' : '收藏' }}
       </button>
+      <!-- 快捷访问（文件/文件夹通用） -->
+      <button class="ctx-item" @click.stop="toggleQuickAccess(contextMenu.target)">
+        <el-icon><StarFilled v-if="isQuickAccess(contextMenu.target)" /><Star v-else /></el-icon> {{ isQuickAccess(contextMenu.target) ? '从快捷访问移除' : '添加到快捷访问' }}
+      </button>
       <div class="ctx-sep" />
       <template v-if="contextMenu.target?.isDir">
         <!-- 文件夹菜单 -->
@@ -1706,6 +1930,9 @@ onMounted(async () => {
         <div class="ctx-sep" />
         <button class="ctx-item" @click.stop="ctxAction('share')">
           <el-icon><Share /></el-icon> 分享
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('collab-share')">
+          <el-icon><User /></el-icon> 共享给用户
         </button>
         <button class="ctx-item" @click.stop="ctxAction('compress')">
           <el-icon><Box /></el-icon> 压缩
@@ -1742,6 +1969,9 @@ onMounted(async () => {
         <div class="ctx-sep" />
         <button class="ctx-item" @click.stop="ctxAction('share')">
           <el-icon><Share /></el-icon> 分享
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('collab-share')">
+          <el-icon><User /></el-icon> 共享给用户
         </button>
         <button class="ctx-item" @click.stop="ctxAction('rename')">
           <el-icon><EditPen /></el-icon> 重命名
@@ -1959,6 +2189,49 @@ onMounted(async () => {
 }
 .crumb:hover {
   filter: brightness(1.1);
+}
+
+/* 全局搜索框（常驻） */
+.toolbar-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  min-width: 220px;
+  max-width: 320px;
+}
+.toolbar-search-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.toolbar-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: var(--text);
+  min-width: 120px;
+}
+.toolbar-search-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+.toolbar-search-btn {
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toolbar-search-btn:hover {
+  filter: brightness(1.05);
 }
 
 /* 视图切换 */
@@ -2182,6 +2455,50 @@ onMounted(async () => {
 .file-card.selected .fc-name {
   color: var(--accent);
 }
+
+/* ---------- 骨架屏 + 淡入动画 ---------- */
+.skeleton-card {
+  pointer-events: none;
+  user-select: none;
+}
+.skeleton-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  margin: 8px auto 0;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-name {
+  width: 60%;
+  height: 14px;
+  border-radius: 4px;
+  margin: 10px auto 0;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.15) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.skeleton-meta {
+  width: 40%;
+  height: 12px;
+  border-radius: 4px;
+  margin: 8px auto 0;
+  background: linear-gradient(90deg, var(--glass-bg) 25%, rgba(255,255,255,0.12) 50%, var(--glass-bg) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.file-fade-in {
+  animation: fade-in-up 0.35s ease-out both;
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 /* 选择框：左上角，始终可见 */
 .fc-checkbox {
   position: absolute;
@@ -2215,10 +2532,11 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 6px;
-  opacity: 0;
+  opacity: 0.55;
   transition: opacity 0.2s;
 }
-.file-card:hover .fc-actions {
+.file-card:hover .fc-actions,
+.file-card.selected .fc-actions {
   opacity: 1;
 }
 .row-actions {
@@ -2583,5 +2901,12 @@ onMounted(async () => {
 }
 .tag-existing-label {
   margin-right: 8px;
+}
+
+/* 共享给用户提示 */
+.collab-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 </style>

@@ -1,6 +1,6 @@
 {
   "name": "@nebula/server",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -18,7 +18,9 @@
     "archiver": "^8.0.0",
     "basic-ftp": "^5.2.0",
     "fastify": "^4.28.1",
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^9.0.5",
+    "otpauth": "^9.5.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",

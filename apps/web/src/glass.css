@@ -339,6 +339,736 @@
   border-radius: 0;
 }
 
+/* ---------- 主题 10：极光 Aurora ---------- */
+/* 深色基底 + 流动极光渐变 + 柔和光晕 + 大圆角 + 微妙动画 */
+[data-theme='aurora'] {
+  --bg: linear-gradient(160deg, #0a0e1a 0%, #101828 30%, #0d1a2a 60%, #0a1620 100%);
+  --blur: 24px;
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-bg-hover: rgba(255, 255, 255, 0.12);
+  --glass-border: rgba(120, 180, 255, 0.18);
+  --glass-highlight: rgba(180, 220, 255, 0.12);
+  --text: #e8f0ff;
+  --text-secondary: rgba(232, 240, 255, 0.55);
+  --accent: #7c6ef0;
+  --accent-2: #64a0ff;
+  --accent-soft: rgba(124, 110, 240, 0.18);
+  --surface: rgba(255, 255, 255, 0.04);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 60px rgba(100, 160, 255, 0.06);
+  --shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 80px rgba(100, 160, 255, 0.12);
+}
+[data-theme='aurora'] body {
+  background: linear-gradient(160deg, #0a0e1a 0%, #101828 30%, #0d1a2a 60%, #0a1620 100%);
+}
+[data-theme='aurora'] .app-bg::before {
+  content: '';
+  position: fixed;
+  top: -20%;
+  left: -10%;
+  width: 60%;
+  height: 80%;
+  background: radial-gradient(ellipse, rgba(100, 200, 150, 0.12) 0%, transparent 70%);
+  pointer-events: none;
+  animation: aurora-drift 20s ease-in-out infinite;
+}
+[data-theme='aurora'] .app-bg::after {
+  content: '';
+  position: fixed;
+  top: -10%;
+  right: -10%;
+  width: 50%;
+  height: 70%;
+  background: radial-gradient(ellipse, rgba(124, 110, 240, 0.1) 0%, transparent 70%);
+  pointer-events: none;
+  animation: aurora-drift 25s ease-in-out infinite reverse;
+}
+@keyframes aurora-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(5%, 8%) scale(1.1); }
+}
+[data-theme='aurora'] .glass,
+[data-theme='aurora'] .glass-card,
+[data-theme='aurora'] .glass-btn {
+  border-radius: 20px;
+  border: 1px solid rgba(120, 180, 255, 0.15);
+}
+[data-theme='aurora'] .glass-card:hover {
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 80px rgba(124, 110, 240, 0.15);
+  border-color: rgba(124, 110, 240, 0.35);
+}
+[data-theme='aurora'] .el-dialog {
+  background: rgba(16, 24, 40, 0.97);
+  border: 1px solid rgba(120, 180, 255, 0.2);
+  border-radius: 20px;
+}
+[data-theme='aurora'] .el-input__wrapper,
+[data-theme='aurora'] .el-textarea__inner,
+[data-theme='aurora'] .el-select__wrapper {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(120, 180, 255, 0.15);
+  border-radius: 12px;
+}
+
+/* ---------- 主题 11：纸墨 Ink ---------- */
+/* 中国水墨 + 暖纸色 + 衬线字体 + 毛笔质感边框 + 无阴影 */
+[data-theme='ink'] {
+  --bg: #f4f0e8;
+  --blur: 0px;
+  --glass-bg: rgba(255, 253, 248, 0.96);
+  --glass-bg-hover: rgba(255, 253, 248, 1);
+  --glass-border: rgba(80, 60, 40, 0.15);
+  --glass-highlight: transparent;
+  --text: #2c2418;
+  --text-secondary: rgba(44, 36, 24, 0.55);
+  --accent: #8b4513;
+  --accent-2: #a0522d;
+  --accent-soft: rgba(139, 69, 19, 0.08);
+  --surface: rgba(255, 253, 248, 0.94);
+  --shadow: none;
+  --shadow-hover: 0 2px 8px rgba(44, 36, 24, 0.08);
+}
+[data-theme='ink'] body {
+  font-family: 'Songti SC', 'STSong', 'SimSun', 'Georgia', serif;
+  background: #f4f0e8;
+}
+[data-theme='ink'] .glass,
+[data-theme='ink'] .glass-card,
+[data-theme='ink'] .glass-btn {
+  border-radius: 2px;
+  border: 1.5px solid rgba(80, 60, 40, 0.2);
+  box-shadow: none;
+  background: rgba(255, 253, 248, 0.96);
+}
+[data-theme='ink'] .glass-card:hover {
+  border-color: rgba(139, 69, 19, 0.4);
+  box-shadow: 0 2px 12px rgba(44, 36, 24, 0.1);
+}
+[data-theme='ink'] .el-dialog {
+  background: #fdfbf7;
+  border: 1.5px solid rgba(80, 60, 40, 0.25);
+  border-radius: 2px;
+  box-shadow: 0 4px 24px rgba(44, 36, 24, 0.12);
+}
+[data-theme='ink'] .el-input__wrapper,
+[data-theme='ink'] .el-textarea__inner,
+[data-theme='ink'] .el-select__wrapper {
+  background-color: #fdfbf7;
+  border: 1.5px solid rgba(80, 60, 40, 0.2);
+  border-radius: 2px;
+}
+[data-theme='ink'] h1, [data-theme='ink'] h2, [data-theme='ink'] h3,
+[data-theme='ink'] h4, [data-theme='ink'] h5 {
+  font-family: 'Kaiti SC', 'STKaiti', 'KaiTi', 'Songti SC', serif;
+  font-weight: 700;
+}
+
+/* ---------- 主题 12：终端 Terminal ---------- */
+/* CRT 显示器 + 荧光绿 + 扫描线 + 等宽字体 + 发光效果 */
+[data-theme='terminal'] {
+  --bg: #0a0a0a;
+  --blur: 0px;
+  --glass-bg: rgba(10, 20, 10, 0.92);
+  --glass-bg-hover: rgba(15, 30, 15, 0.96);
+  --glass-border: rgba(0, 255, 65, 0.25);
+  --glass-highlight: rgba(0, 255, 65, 0.06);
+  --text: #00ff41;
+  --text-secondary: rgba(0, 255, 65, 0.5);
+  --accent: #00ff41;
+  --accent-soft: rgba(0, 255, 65, 0.12);
+  --surface: rgba(10, 20, 10, 0.9);
+  --shadow: 0 0 12px rgba(0, 255, 65, 0.08);
+  --shadow-hover: 0 0 24px rgba(0, 255, 65, 0.18);
+}
+[data-theme='terminal'] body {
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+  background: #0a0a0a;
+}
+[data-theme='terminal'] .app-bg {
+  position: relative;
+}
+[data-theme='terminal'] .app-bg::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 65, 0.015) 2px,
+    rgba(0, 255, 65, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+[data-theme='terminal'] .glass,
+[data-theme='terminal'] .glass-card,
+[data-theme='terminal'] .glass-btn {
+  border-radius: 2px;
+  border: 1px solid rgba(0, 255, 65, 0.3);
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.06), inset 0 0 8px rgba(0, 255, 65, 0.03);
+}
+[data-theme='terminal'] .glass-card:hover {
+  box-shadow: 0 0 24px rgba(0, 255, 65, 0.15), inset 0 0 12px rgba(0, 255, 65, 0.06);
+  border-color: rgba(0, 255, 65, 0.5);
+}
+[data-theme='terminal'] .el-dialog {
+  background: rgba(10, 20, 10, 0.97);
+  border: 1px solid rgba(0, 255, 65, 0.35);
+  border-radius: 2px;
+  box-shadow: 0 0 40px rgba(0, 255, 65, 0.1);
+}
+[data-theme='terminal'] .el-input__wrapper,
+[data-theme='terminal'] .el-textarea__inner,
+[data-theme='terminal'] .el-select__wrapper {
+  background-color: rgba(10, 20, 10, 0.9);
+  border: 1px solid rgba(0, 255, 65, 0.3);
+  border-radius: 2px;
+}
+[data-theme='terminal'] .el-button--primary {
+  background: rgba(0, 255, 65, 0.15);
+  border-color: rgba(0, 255, 65, 0.5);
+  color: #00ff41;
+}
+[data-theme='terminal'] .el-button--primary:hover {
+  background: rgba(0, 255, 65, 0.25);
+  box-shadow: 0 0 16px rgba(0, 255, 65, 0.2);
+}
+
+/* ---------- 主题 13：落日 Sunset ---------- */
+/* 暖色渐变 + 大圆角 + 柔和阴影 + 梦境氛围 + 珊瑚色强调 */
+[data-theme='sunset'] {
+  --bg: linear-gradient(180deg, #ff9a76 0%, #ff6f91 25%, #c86bfa 50%, #6b82f0 75%, #3d5ef5 100%);
+  --blur: 22px;
+  --glass-bg: rgba(255, 255, 255, 0.35);
+  --glass-bg-hover: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-highlight: rgba(255, 255, 255, 0.7);
+  --text: #2d1b3d;
+  --text-secondary: rgba(45, 27, 61, 0.6);
+  --accent: #ff6f91;
+  --accent-2: #ff9e7d;
+  --accent-soft: rgba(255, 111, 145, 0.18);
+  --surface: rgba(255, 255, 255, 0.28);
+  --shadow: 0 12px 40px rgba(45, 27, 61, 0.15);
+  --shadow-hover: 0 20px 60px rgba(45, 27, 61, 0.22);
+}
+[data-theme='sunset'] body {
+  background: linear-gradient(180deg, #ff9a76 0%, #ff6f91 25%, #c86bfa 50%, #6b82f0 75%, #3d5ef5 100%);
+}
+[data-theme='sunset'] .glass,
+[data-theme='sunset'] .glass-card,
+[data-theme='sunset'] .glass-btn {
+  border-radius: 24px;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+}
+[data-theme='sunset'] .glass-card:hover {
+  box-shadow: 0 20px 60px rgba(45, 27, 61, 0.25), 0 0 40px rgba(255, 111, 145, 0.1);
+  transform: scale(1.02) translateY(-3px);
+}
+[data-theme='sunset'] .el-dialog {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
+  border-radius: 24px;
+  backdrop-filter: blur(20px);
+}
+[data-theme='sunset'] .el-input__wrapper,
+[data-theme='sunset'] .el-textarea__inner,
+[data-theme='sunset'] .el-select__wrapper {
+  background-color: rgba(255, 255, 255, 0.6);
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  border-radius: 16px;
+}
+[data-theme='sunset'] .el-button--primary {
+  background: linear-gradient(135deg, #ff6f91, #ff9a76);
+  border: none;
+  border-radius: 16px;
+}
+
+/* ============================================================
+   2026 创意新主题（创意设计师产出，供 UI 设计师落地）
+   趋势锚点：液态玻璃 / 空间 3D · 自然有机 / 尊重注意力 · AI 原生 / 动态渐变
+   ============================================================ */
+
+/* ---------- 新主题 A：星尘 Stardust（液态玻璃 + 空间 3D） ----------
+   理念：网盘是一片星云，文件是星尘；玻璃如透镜折射星光，悬浮于深空之上。
+   2026 趋势：Apple 液态玻璃（glass as material）+ 空间计算 3D 景深。 */
+[data-theme='stardust'] {
+  --bg: linear-gradient(160deg, #05070f 0%, #0a1022 35%, #121a3c 70%, #0a0f24 100%);
+  --blur: 28px;
+  --glass-bg: rgba(160, 190, 255, 0.07);
+  --glass-bg-hover: rgba(160, 190, 255, 0.15);
+  --glass-border: rgba(140, 180, 255, 0.24);
+  --glass-highlight: rgba(205, 228, 255, 0.20);
+  --text: #eaf1ff;
+  --text-secondary: rgba(234, 241, 255, 0.55);
+  --accent: #4cc9ff;
+  --accent-2: #8b7bff;
+  --accent-soft: rgba(76, 201, 255, 0.16);
+  --surface: rgba(140, 180, 255, 0.05);
+  --shadow: 0 10px 36px rgba(0, 0, 0, 0.55), 0 0 40px rgba(76, 201, 255, 0.08);
+  --shadow-hover: 0 18px 56px rgba(0, 0, 0, 0.66), 0 0 64px rgba(76, 201, 255, 0.18);
+}
+/* 深空星野背景层：双径向星云光斑缓慢漂移，营造空间纵深 */
+[data-theme='stardust'] .app-bg::before {
+  content: '';
+  position: fixed;
+  top: -18%;
+  left: -12%;
+  width: 62%;
+  height: 84%;
+  background: radial-gradient(ellipse, rgba(76, 201, 255, 0.16) 0%, transparent 70%);
+  pointer-events: none;
+  animation: stardust-drift 24s ease-in-out infinite;
+}
+[data-theme='stardust'] .app-bg::after {
+  content: '';
+  position: fixed;
+  bottom: -16%;
+  right: -10%;
+  width: 56%;
+  height: 74%;
+  background: radial-gradient(ellipse, rgba(139, 123, 255, 0.14) 0%, transparent 70%);
+  pointer-events: none;
+  animation: stardust-drift 30s ease-in-out infinite reverse;
+}
+@keyframes stardust-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(4%, 7%) scale(1.12); }
+}
+[data-theme='stardust'] .glass,
+[data-theme='stardust'] .glass-card,
+[data-theme='stardust'] .glass-btn {
+  border-radius: 22px;
+  border: 1px solid rgba(140, 180, 255, 0.22);
+  /* 液态玻璃：顶部高光 + 内侧折射描边，模拟透镜边缘 */
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(220, 236, 255, 0.35), inset 0 0 0 1px rgba(200, 225, 255, 0.04);
+}
+[data-theme='stardust'] .glass-card:hover {
+  box-shadow: var(--shadow-hover), inset 0 1px 0 rgba(220, 236, 255, 0.5), inset 0 0 18px rgba(76, 201, 255, 0.10);
+  border-color: rgba(76, 201, 255, 0.45);
+}
+[data-theme='stardust'] .el-dialog {
+  background: rgba(10, 16, 34, 0.9);
+  border: 1px solid rgba(140, 180, 255, 0.24);
+  border-radius: 22px;
+}
+[data-theme='stardust'] .el-input__wrapper,
+[data-theme='stardust'] .el-textarea__inner,
+[data-theme='stardust'] .el-select__wrapper {
+  background-color: rgba(160, 190, 255, 0.08);
+  border: 1px solid rgba(140, 180, 255, 0.2);
+  border-radius: 12px;
+}
+[data-theme='stardust'] .el-button--primary:not(.is-link) {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+
+/* ---------- 新主题 B：晨曦 Dawn（自然有机 + 尊重注意力） ----------
+   理念：清晨的第一缕光，温暖、安静、有机；界面退后，内容向前，尊重用户注意力。
+   2026 趋势：Calm UI / 尊重注意力 + 自然有机 + 高级极简。 */
+[data-theme='dawn'] {
+  --bg: linear-gradient(180deg, #fdf9f4 0%, #f8f0e6 55%, #f2e8dc 100%);
+  --blur: 0px;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-hover: rgba(255, 255, 255, 0.94);
+  --glass-border: rgba(122, 92, 62, 0.10);
+  --glass-highlight: rgba(255, 255, 255, 0.92);
+  --text: #3a2e22;
+  --text-secondary: rgba(58, 46, 34, 0.55);
+  --accent: #e8823c;
+  --accent-2: #d96a4e;
+  --accent-soft: rgba(232, 130, 60, 0.12);
+  --surface: rgba(255, 255, 255, 0.66);
+  --shadow: 0 6px 20px rgba(92, 64, 40, 0.08);
+  --shadow-hover: 0 12px 32px rgba(92, 64, 40, 0.15);
+}
+[data-theme='dawn'] body {
+  background: linear-gradient(180deg, #fdf9f4 0%, #f8f0e6 55%, #f2e8dc 100%);
+}
+[data-theme='dawn'] .glass,
+[data-theme='dawn'] .glass-card,
+[data-theme='dawn'] .glass-btn {
+  border-radius: 14px;
+  border: 1px solid rgba(122, 92, 62, 0.12);
+  box-shadow: var(--shadow);
+}
+[data-theme='dawn'] .glass-card:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+[data-theme='dawn'] .el-dialog {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(122, 92, 62, 0.14);
+  border-radius: 14px;
+}
+[data-theme='dawn'] .el-input__wrapper,
+[data-theme='dawn'] .el-textarea__inner,
+[data-theme='dawn'] .el-select__wrapper {
+  background-color: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(122, 92, 62, 0.16);
+  border-radius: 10px;
+}
+[data-theme='dawn'] .el-button--primary:not(.is-link) {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+
+/* ---------- 新主题 C：流光 Flow（AI 原生 + 动态渐变） ----------
+   理念：AI 原生的智能中枢，一块流动的"星云核心"贯穿界面，光随操作而流动。
+   2026 趋势：AI 原生 agentic 界面 + 动态渐变 mesh + 高级暗色。 */
+[data-theme='flow'] {
+  --bg: linear-gradient(135deg, #0c0c14 0%, #151524 50%, #0e0e1a 100%);
+  --blur: 20px;
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-bg-hover: rgba(255, 255, 255, 0.11);
+  --glass-border: rgba(167, 139, 250, 0.26);
+  --glass-highlight: rgba(205, 170, 255, 0.16);
+  --text: #f0edff;
+  --text-secondary: rgba(240, 237, 255, 0.55);
+  --accent: #a78bfa;
+  --accent-2: #22d3ee;
+  --accent-soft: rgba(167, 139, 250, 0.18);
+  --surface: rgba(255, 255, 255, 0.04);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 50px rgba(167, 139, 250, 0.10);
+  --shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 72px rgba(167, 139, 250, 0.22);
+}
+/* 动态渐变 mesh：紫-青双色光斑缓慢流动，是"活的"星云核心 */
+[data-theme='flow'] .app-bg::before {
+  content: '';
+  position: fixed;
+  top: -15%;
+  right: -12%;
+  width: 58%;
+  height: 80%;
+  background: radial-gradient(ellipse, rgba(167, 139, 250, 0.18) 0%, transparent 70%);
+  pointer-events: none;
+  animation: flow-drift 18s ease-in-out infinite;
+}
+[data-theme='flow'] .app-bg::after {
+  content: '';
+  position: fixed;
+  bottom: -14%;
+  left: -10%;
+  width: 54%;
+  height: 76%;
+  background: radial-gradient(ellipse, rgba(34, 211, 238, 0.16) 0%, transparent 70%);
+  pointer-events: none;
+  animation: flow-drift 22s ease-in-out infinite reverse;
+}
+@keyframes flow-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-5%, 6%) scale(1.15); }
+}
+[data-theme='flow'] .glass,
+[data-theme='flow'] .glass-card,
+[data-theme='flow'] .glass-btn {
+  border-radius: 18px;
+  border: 1px solid rgba(167, 139, 250, 0.24);
+}
+[data-theme='flow'] .glass-card:hover {
+  box-shadow: var(--shadow-hover), inset 0 0 22px rgba(34, 211, 238, 0.08);
+  border-color: rgba(34, 211, 238, 0.45);
+}
+[data-theme='flow'] .el-dialog {
+  background: rgba(14, 14, 26, 0.94);
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: 18px;
+}
+[data-theme='flow'] .el-input__wrapper,
+[data-theme='flow'] .el-textarea__inner,
+[data-theme='flow'] .el-select__wrapper {
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  border-radius: 12px;
+}
+[data-theme='flow'] .el-button--primary:not(.is-link) {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+
+/* ============================================================
+   UI 设计师落地（2026 大改版）
+   3 个新主题各自风格各异 + 现有主题协调升级
+   原则：CSS 变量驱动，换主题自动适配；不改 JS/路由/API
+   ============================================================ */
+
+/* ---------- 星尘 Stardust：悬浮玻璃岛 + 疏朗大间距 + 三级纵深 ----------
+   深空(最暗) → 玻璃卡片(中) → 星光强调(亮)；侧边栏悬浮于深空，不贴边。 */
+[data-theme='stardust'] .layout {
+  padding: 16px;
+  gap: 16px;
+}
+[data-theme='stardust'] .aside {
+  border-radius: 24px;
+  background: rgba(140, 180, 255, 0.05);
+  backdrop-filter: blur(28px) saturate(170%);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55), 0 0 52px rgba(76, 201, 255, 0.10),
+    inset 0 1px 0 rgba(220, 236, 255, 0.30);
+}
+[data-theme='stardust'] .header {
+  border-radius: 22px;
+  background: rgba(140, 180, 255, 0.06);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 38px rgba(76, 201, 255, 0.08),
+    inset 0 1px 0 rgba(220, 236, 255, 0.28);
+}
+/* 文件卡片：疏朗大间距 + 悬浮透镜 */
+[data-theme='stardust'] .file-grid {
+  gap: 18px !important;
+}
+[data-theme='stardust'] .file-card {
+  border-radius: 22px !important;
+  padding: 22px 16px !important;
+}
+[data-theme='stardust'] .file-card:hover {
+  /* P2-6：hover 位移/缩放由 -4px/1.02 降到 -3px/1.01，减少密集网格中的抖动 */
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: var(--shadow-hover), inset 0 1px 0 rgba(220, 236, 255, 0.5),
+    0 0 32px rgba(76, 201, 255, 0.16);
+}
+/* 文件图标：星光质感 + 悬停微弱闪烁（克制的活感） */
+[data-theme='stardust'] .fc-icon {
+  filter: drop-shadow(0 0 4px rgba(76, 201, 255, 0.22));
+}
+[data-theme='stardust'] .file-card:hover .fc-icon {
+  animation: stardust-twinkle 1.6s ease-in-out;
+}
+@keyframes stardust-twinkle {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(76, 201, 255, 0.22)); }
+  50% { filter: drop-shadow(0 0 11px rgba(120, 200, 255, 0.6)); }
+}
+/* 侧边栏选中态：星光内发光 */
+[data-theme='stardust'] .menu-item.active {
+  box-shadow: inset 0 1px 0 rgba(220, 236, 255, 0.30), 0 0 18px rgba(76, 201, 255, 0.14);
+}
+
+/* ---------- 晨曦 Dawn：暖白纸面 + 大留白 + 字号分层 ----------
+   去玻璃去发光；界面退后，内容向前；靠字号与留白分层，动效克制。 */
+[data-theme='dawn'] .layout {
+  padding: 22px;
+  gap: 22px;
+}
+[data-theme='dawn'] .aside {
+  border-radius: 18px;
+  background: #f8f2e9;
+  backdrop-filter: none;
+  border: 1px solid rgba(122, 92, 62, 0.14);
+  box-shadow: 0 2px 14px rgba(92, 64, 40, 0.07);
+}
+[data-theme='dawn'] .header {
+  border-radius: 18px;
+  background: #f8f2e9;
+  backdrop-filter: none;
+  border: 1px solid rgba(122, 92, 62, 0.14);
+  box-shadow: 0 2px 14px rgba(92, 64, 40, 0.07);
+}
+/* 大留白降密度 */
+[data-theme='dawn'] .main {
+  padding: 10px;
+}
+[data-theme='dawn'] .file-grid {
+  gap: 22px !important;
+}
+[data-theme='dawn'] .file-card {
+  border-radius: 16px !important;
+  padding: 26px 18px !important;
+  background: #ffffff;
+  backdrop-filter: none;
+  box-shadow: 0 4px 18px rgba(92, 64, 40, 0.08);
+}
+[data-theme='dawn'] .file-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(92, 64, 40, 0.14);
+}
+/* 字号分层：标题衬线点缀 */
+/* P2-7：补全跨平台衬线字体栈 —— Noto Serif SC / Source Han Serif（现代一致的中文衬线，
+   常见于 Windows/macOS）、NSimSun（Windows 新宋体）、SimSun（Windows 宋体），
+   末尾 serif 兜底，避免 Windows 上字体回退不一致导致标题观感不稳。 */
+[data-theme='dawn'] .page-title {
+  font-family: Georgia, 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', 'NSimSun', serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+[data-theme='dawn'] .fc-name {
+  font-size: 15px;
+  font-weight: 500;
+}
+[data-theme='dawn'] .fc-meta {
+  font-size: 12.5px;
+}
+/* 菜单项：纸面质感，无发光 */
+[data-theme='dawn'] .menu-item {
+  border-radius: 10px;
+}
+[data-theme='dawn'] .menu-item.active {
+  background: rgba(232, 130, 60, 0.10);
+  box-shadow: none;
+}
+
+/* ---------- 流光 Flow：AI 中枢 + Bento 内容 + 流光核心 ----------
+   AI 原生：侧边栏常驻 AI 助手面板；内容区 Bento（大卡=AI 洞察，小卡=文件）；
+   流光核心从侧栏延伸到内容区。 */
+[data-theme='flow'] .layout {
+  padding: 14px;
+  gap: 14px;
+}
+[data-theme='flow'] .aside {
+  border-radius: 22px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(120, 220, 255, 0.22);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 44px rgba(0, 220, 255, 0.10),
+    inset 0 1px 0 rgba(200, 240, 255, 0.22);
+}
+[data-theme='flow'] .header {
+  border-radius: 22px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(120, 220, 255, 0.18);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 32px rgba(0, 220, 255, 0.08),
+    inset 0 1px 0 rgba(200, 240, 255, 0.20);
+}
+/* Bento 内容：AI 洞察大卡 + 文件小卡 */
+[data-theme='flow'] .file-grid {
+  gap: 14px !important;
+}
+[data-theme='flow'] .file-card {
+  border-radius: 18px !important;
+}
+[data-theme='flow'] .file-card:hover {
+  box-shadow: var(--shadow-hover), inset 0 1px 0 rgba(200, 240, 255, 0.4),
+    0 0 26px rgba(0, 220, 255, 0.14);
+}
+/* 流光核心：贯穿侧栏与内容的流动渐变条 */
+[data-theme='flow'] .flow-core {
+  display: block;
+  height: 3px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
+  background-size: 220% 100%;
+  animation: flow-core-run 5s linear infinite;
+  opacity: 0.9;
+}
+@keyframes flow-core-run {
+  0% { background-position: 0% 0; }
+  100% { background-position: 220% 0; }
+}
+/* AI 助手面板（侧边栏常驻，仅 flow 显示） */
+.ai-panel,
+.ai-insight {
+  display: none;
+}
+[data-theme='flow'] .ai-panel {
+  display: block;
+  margin: 4px 10px 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(150deg, rgba(0, 220, 255, 0.10), rgba(255, 0, 170, 0.08));
+  border: 1px solid rgba(120, 220, 255, 0.24);
+  box-shadow: 0 0 24px rgba(0, 220, 255, 0.10), inset 0 1px 0 rgba(200, 240, 255, 0.22);
+}
+[data-theme='flow'] .ai-panel .ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eaf6ff;
+}
+[data-theme='flow'] .ai-panel .ai-head .el-icon {
+  color: var(--accent);
+}
+[data-theme='flow'] .ai-panel .ai-sub {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(234, 246, 255, 0.55);
+}
+[data-theme='flow'] .ai-panel .ai-core {
+  margin-top: 10px;
+}
+/* AI 洞察大卡（内容区顶部，仅 flow 显示） */
+[data-theme='flow'] .ai-insight {
+  display: block;
+  margin: 0 0 14px;
+  padding: 18px 22px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(0, 220, 255, 0.12), rgba(255, 0, 170, 0.10) 60%, rgba(0, 220, 255, 0.06));
+  border: 1px solid rgba(120, 220, 255, 0.26);
+  box-shadow: 0 0 36px rgba(0, 220, 255, 0.12), inset 0 1px 0 rgba(200, 240, 255, 0.24);
+}
+[data-theme='flow'] .ai-insight .ai-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #eaf6ff;
+}
+[data-theme='flow'] .ai-insight .ai-title .el-icon {
+  color: var(--accent);
+}
+[data-theme='flow'] .ai-insight .ai-desc {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(234, 246, 255, 0.62);
+}
+[data-theme='flow'] .ai-insight .ai-core {
+  margin-top: 14px;
+}
+/* P0-3：AI 占位的诚实"即将上线"徽章 —— 明确告知用户该能力尚未提供，不假装在工作 */
+[data-theme='flow'] .ai-panel .ai-badge,
+[data-theme='flow'] .ai-insight .ai-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(120, 220, 255, 0.14);
+  border: 1px solid rgba(120, 220, 255, 0.32);
+  color: rgba(234, 246, 255, 0.85);
+  white-space: nowrap;
+}
+/* 侧边栏折叠时隐藏 AI 面板（宽度不足） */
+[data-theme='flow'] .aside.collapsed .ai-panel {
+  display: none !important;
+}
+
+/* ---------- 现有主题协调升级 ----------
+   在保持各自特色的前提下，统一圆角/阴影/间距节奏，与新主题协调。 */
+/* 通用：卡片悬停轻微抬升，统一微交互 */
+[data-theme='light-glass'] .file-card:hover,
+[data-theme='dark-glass'] .file-card:hover,
+[data-theme='aurora'] .file-card:hover,
+[data-theme='ink'] .file-card:hover,
+[data-theme='terminal'] .file-card:hover,
+[data-theme='sunset'] .file-card:hover {
+  transform: translateY(-2px);
+}
+/* 通用：主按钮双色渐变（凡定义了 --accent-2 的主题） */
+[data-theme='aurora'] .el-button--primary:not(.is-link),
+[data-theme='ink'] .el-button--primary:not(.is-link),
+[data-theme='sunset'] .el-button--primary:not(.is-link) {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+/* 通用：页面标题统一字重与字号节奏 */
+[data-theme='light-glass'] .page-title,
+[data-theme='dark-glass'] .page-title,
+[data-theme='aurora'] .page-title,
+[data-theme='ink'] .page-title,
+[data-theme='terminal'] .page-title,
+[data-theme='sunset'] .page-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
 /* ============================================================
    玻璃工具类
    ============================================================ */
@@ -362,7 +1092,8 @@
 }
 .glass-card:hover {
   background: var(--glass-bg-hover);
-  transform: scale(1.03) translateY(-2px);
+  /* P2-6：scale 由 1.03 降到 1.01，减少 hover 抖动 / 视觉溢出（位移仅 -2px，主要靠 shadow 强调） */
+  transform: scale(1.01) translateY(-2px);
   box-shadow: var(--shadow-hover), inset 0 1px 0 var(--glass-highlight);
 }
 

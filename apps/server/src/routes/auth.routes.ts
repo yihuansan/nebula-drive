@@ -20,6 +20,9 @@ import {
   clearLoginFailures,
   getFailureCount,
 } from '../services/captcha.service.js';
+import { getDb } from '../db/index.js';
+import { verifyCode } from '../services/totp.service.js';
+import { recordSession, parseDeviceName } from '../services/session.service.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 获取验证码
@@ -29,11 +32,12 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/auth/login', async (req, reply) => {
-    const { username, password, captchaId, captchaCode } = (req.body || {}) as {
+    const { username, password, captchaId, captchaCode, twoFactorCode } = (req.body || {}) as {
       username?: string;
       password?: string;
       captchaId?: string;
       captchaCode?: string;
+      twoFactorCode?: string;
     };
     if (!username || !password) return fail(reply, 400, '请输入用户名和密码');
 
@@ -59,11 +63,96 @@ export async function authRoutes(app: FastifyInstance) {
       return fail(reply, 401, '用户名或密码错误', { requireCaptcha: needCaptcha, failCount: count });
     }
     clearLoginFailures(username);
+
+    // 检查是否启用 2FA
+    const db = getDb();
+    const twoFa = db.prepare('SELECT * FROM user_2fa WHERE user_id = ? AND enabled = 1').get(u.id) as any;
+    if (twoFa) {
+      if (!twoFactorCode) {
+        // 需要 2FA 验证，返回临时 token 供前端进行第二步验证
+        const tempToken = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, 300); // 5 分钟临时 token
+        return ok(reply, {
+          requiresTwoFactor: true,
+          tempToken,
+          user: { ...publicUser(u), avatar: profileService.get(u.id).avatar || '' },
+        });
+      }
+      // 验证 2FA 代码
+      if (!verifyCode(twoFa.secret, parseInt(twoFactorCode, 10))) {
+        // 检查恢复码
+        const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
+        if (!codes.includes(twoFactorCode.toUpperCase())) {
+          return fail(reply, 401, '验证码错误');
+        }
+        // 使用恢复码
+        codes.splice(codes.indexOf(twoFactorCode.toUpperCase()), 1);
+        db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
+          .run(JSON.stringify(codes), u.id);
+      }
+    }
+
     touchLogin(u.id, ip, ua, true);
     const ttlSec = settingNum('sessionTimeoutHours', 168) * 3600;
     const token = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, ttlSec);
+    // 记录会话
+    recordSession(u.id, token, parseDeviceName(ua), ip, ua);
     const profile = profileService.get(u.id);
     return ok(reply, { token, user: { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) } });
+  });
+
+  /** 2FA 登录第二步：验证 2FA 代码，颁发完整 token */
+  app.post('/auth/login/2fa', async (req, reply) => {
+    const { tempToken, code } = (req.body || {}) as { tempToken?: string; code?: string };
+    if (!tempToken || !code) return fail(reply, 400, '缺少参数');
+
+    // 验证临时 token
+    const payload = (await import('../auth/jwt.js')).verifyJwt(tempToken, jwtSecret);
+    if (!payload) return fail(reply, 401, '临时 token 无效或已过期');
+
+    const db = getDb();
+    const twoFa = db.prepare('SELECT * FROM user_2fa WHERE user_id = ? AND enabled = 1').get(payload.sub) as any;
+    if (!twoFa) return fail(reply, 401, '2FA 未启用');
+
+    // 验证 TOTP 代码
+    if (verifyCode(twoFa.secret, parseInt(code, 10))) {
+      const u = findById(payload.sub);
+      if (!u) return fail(reply, 401, '用户不存在');
+      const ttlSec = settingNum('sessionTimeoutHours', 168) * 3600;
+      const token = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, ttlSec);
+      // 记录会话
+      const ip = req.ip;
+      const ua = String(req.headers['user-agent'] || '');
+      recordSession(u.id, token, parseDeviceName(ua), ip, ua);
+      const profile = profileService.get(u.id);
+      return ok(reply, {
+        token,
+        user: { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) },
+      });
+    }
+
+    // 检查恢复码
+    const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
+    const idx = codes.indexOf(code.toUpperCase());
+    if (idx !== -1) {
+      codes.splice(idx, 1);
+      db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
+        .run(JSON.stringify(codes), payload.sub);
+      const u = findById(payload.sub);
+      if (!u) return fail(reply, 401, '用户不存在');
+      const ttlSec = settingNum('sessionTimeoutHours', 168) * 3600;
+      const token = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, ttlSec);
+      // 记录会话
+      const ip = req.ip;
+      const ua = String(req.headers['user-agent'] || '');
+      recordSession(u.id, token, parseDeviceName(ua), ip, ua);
+      const profile = profileService.get(u.id);
+      return ok(reply, {
+        token,
+        user: { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) },
+      });
+    }
+
+    return fail(reply, 401, '验证码错误');
   });
 
   app.post('/auth/logout', { preHandler: authMiddleware }, async (req, reply) => {
