@@ -1889,54 +1889,56 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="330">
           <template #default="{ row }">
-            <el-button link size="small" @click.stop="toggleStar(row)">
-              <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>&nbsp;{{ isStarred(row) ? '已收藏' : '收藏' }}
-            </el-button>
-            <!-- 文件夹：保持原有操作 -->
-            <template v-if="row.isDir">
-              <el-button link type="primary" size="small" @click.stop="openShare(row)">分享</el-button>
-              <el-button link type="primary" size="small" @click.stop="openRename(row)">重命名</el-button>
-              <el-button link type="primary" size="small" @click.stop="openMove(row, 'move')">移动</el-button>
-              <el-button link type="primary" size="small" @click.stop="openMove(row, 'copy')">复制</el-button>
-              <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
-              <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
-                <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="star">
-                      <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>
-                      {{ isStarred(row) ? '取消收藏' : '收藏' }}
-                    </el-dropdown-item>
-                    <el-dropdown-item command="quick-access">
-                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
-                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </template>
-            <!-- 文件：核心操作 + 更多菜单 -->
-            <div v-else class="row-actions">
-              <el-button v-if="isPreviewable(row.name)" link type="primary" size="small" @click.stop="openPreview(row)">预览</el-button>
-              <el-button link type="primary" size="small" @click.stop="download(row)">下载</el-button>
-              <el-button v-if="row.name.toLowerCase().endsWith('.zip')" link type="warning" size="small" @click.stop="doDecompress(row)">解压</el-button>
-              <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
-              <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
-                <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="share">分享</el-dropdown-item>
-                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                    <el-dropdown-item command="move">移动</el-dropdown-item>
-                    <el-dropdown-item command="copy">复制</el-dropdown-item>
-                    <el-dropdown-item command="props">属性</el-dropdown-item>
-                    <el-dropdown-item command="quick-access">
-                      <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
-                      {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+            <div class="row-actions-wrap">
+              <el-button link size="small" @click.stop="toggleStar(row)">
+                <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>&nbsp;{{ isStarred(row) ? '已收藏' : '收藏' }}
+              </el-button>
+              <!-- 文件夹：保持原有操作 -->
+              <template v-if="row.isDir">
+                <el-button link type="primary" size="small" @click.stop="openShare(row)">分享</el-button>
+                <el-button link type="primary" size="small" @click.stop="openRename(row)">重命名</el-button>
+                <el-button link type="primary" size="small" @click.stop="openMove(row, 'move')">移动</el-button>
+                <el-button link type="primary" size="small" @click.stop="openMove(row, 'copy')">复制</el-button>
+                <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
+                <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
+                  <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="star">
+                        <el-icon><StarFilled v-if="isStarred(row)" /><Star v-else /></el-icon>
+                        {{ isStarred(row) ? '取消收藏' : '收藏' }}
+                      </el-dropdown-item>
+                      <el-dropdown-item command="quick-access">
+                        <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                        {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </template>
+              <!-- 文件：核心操作 + 更多菜单 -->
+              <div v-else class="row-actions">
+                <el-button v-if="isPreviewable(row.name)" link type="primary" size="small" @click.stop="openPreview(row)">预览</el-button>
+                <el-button link type="primary" size="small" @click.stop="download(row)">下载</el-button>
+                <el-button v-if="row.name.toLowerCase().endsWith('.zip')" link type="warning" size="small" @click.stop="doDecompress(row)">解压</el-button>
+                <el-button link type="danger" size="small" @click.stop="doDelete(row)">删除</el-button>
+                <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCmd(cmd, row)">
+                  <el-button link size="small" class="more-btn"><el-icon><MoreFilled /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="share">分享</el-dropdown-item>
+                      <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                      <el-dropdown-item command="move">移动</el-dropdown-item>
+                      <el-dropdown-item command="copy">复制</el-dropdown-item>
+                      <el-dropdown-item command="props">属性</el-dropdown-item>
+                      <el-dropdown-item command="quick-access">
+                        <el-icon><StarFilled v-if="isQuickAccess(row)" /><Star v-else /></el-icon>
+                        {{ isQuickAccess(row) ? '从快捷访问移除' : '添加到快捷访问' }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -3168,7 +3170,7 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 12px;
   margin-top: 6px;
-  opacity: 0.55;
+  opacity: 0;
   transition: opacity 0.2s;
 }
 .file-card:hover .fc-actions,
@@ -3180,6 +3182,22 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+}
+.row-actions-wrap {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.file-table :deep(.el-table__row:hover) .row-actions-wrap {
+  opacity: 1;
+}
+/* 触屏（无 hover）设备：操作按钮常显，避免丢失文件级操作入口 */
+@media (hover: none) {
+  .fc-actions {
+    opacity: 1;
+  }
+  .row-actions-wrap {
+    opacity: 1;
+  }
 }
 .more-btn {
   padding: 4px;
