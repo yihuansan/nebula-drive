@@ -33,16 +33,23 @@ function fmtRep(rep: SyncReport): string {
 }
 
 program
-  .command('login <url> <username> <password>')
+  .command('login <url> <username> [password]')
   .description('登录服务器并保存令牌（用于 create-pair）')
   .option('--url <url>', '（占位，兼容写法）')
-  .action(async (url: string, username: string, password: string) => {
+  .action(async (url: string, username: string, password?: string) => {
+    // S1: 密码优先读环境变量 NEBULA_PASSWORD（桌面端为避免 argv 明文），fallback 到位置参数
+    const pwd = process.env.NEBULA_PASSWORD || password;
+    if (!pwd) {
+      console.error('缺少密码：请通过位置参数指定，或设置环境变量 NEBULA_PASSWORD');
+      process.exitCode = 1;
+      return;
+    }
     const st = getState();
     const u = normalizeUrl(url);
     const r = await fetch(`${u}/api/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password: pwd }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
@@ -102,12 +109,19 @@ program
 program
   .command('add <name>')
   .description('注册一个本地同步任务')
-  .requiredOption('--token <token>', '同步对令牌（create-pair 返回）')
+  .option('--token <token>', '同步对令牌（create-pair 返回；也可通过环境变量 NEBULA_TOKEN 传入）')
   .requiredOption('--dir <dir>', '本地同步目录')
   .option('--mode <mode>', 'push | pull | two-way', 'two-way')
   .option('--url <url>', '服务器地址（默认用已登录的唯一服务器）')
   .action(async (name: string, opts) => {
     const st = getState();
+    // S2: token 优先读环境变量 NEBULA_TOKEN（桌面端为避免 argv 明文），fallback 到 --token
+    const token = process.env.NEBULA_TOKEN || opts.token;
+    if (!token) {
+      console.error('缺少同步令牌：请通过 --token 指定，或设置环境变量 NEBULA_TOKEN');
+      process.exitCode = 1;
+      return;
+    }
     const auth = st.authFor(opts.url);
     const url = opts.url ? normalizeUrl(opts.url) : auth?.url;
     if (!url) {
@@ -115,7 +129,7 @@ program
       process.exitCode = 1;
       return;
     }
-    const client = new SyncClient(url, opts.token);
+    const client = new SyncClient(url, token);
     try {
       await client.ping();
     } catch (e) {
@@ -124,7 +138,7 @@ program
       return;
     }
     const dir = path.resolve(opts.dir);
-    const id = st.addPair(name, url, opts.token, dir, (opts.mode || 'two-way') as Pair['mode']);
+    const id = st.addPair(name, url, token, dir, (opts.mode || 'two-way') as Pair['mode']);
     console.log(`已添加同步任务 #${id} ${name} -> ${dir}`);
   });
 

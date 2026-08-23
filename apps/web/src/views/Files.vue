@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
 import { useTheme, THEMES, type ThemeKey } from '../useTheme';
+import { useAuthStore } from '../stores/auth';
 
 const storages = ref<any[]>([]);
+const usageTotal = ref(0); // 真实配额用量（所有存储 used 之和），挂载时异步加载
 const storageId = ref(0);
 const path = ref('/');
 const entries = ref<any[]>([]);
@@ -13,7 +15,12 @@ const loading = ref(false);
 const hasLoaded = ref(false);
 const selected = ref<any[]>([]);
 const tableRef = ref();
-const view = ref<'grid' | 'list' | 'photo'>('grid');
+/* 视图持久化（F2）：从 localStorage 恢复，切换时写回 */
+const _storedView = localStorage.getItem('nd-view');
+const view = ref<'grid' | 'list' | 'photo'>(
+  _storedView === 'grid' || _storedView === 'list' || _storedView === 'photo' ? _storedView : 'grid'
+);
+watch(view, (v) => localStorage.setItem('nd-view', v));
 const multiSelectMode = ref(false);
 
 /* ---------- 共享给用户功能 ---------- */
@@ -79,12 +86,185 @@ const layoutType = computed(() => {
   return t?.layout || 'sidebar';
 });
 
-// 统计卡片配置
-const statCards = computed(() => [
-  { id: 'folders', icon: 'Folder', iconClass: 'si-blue', label: '文件夹', value: entries.value.filter(e => e.isDir).length },
-  { id: 'files', icon: 'Document', iconClass: 'si-green', label: '文件', value: entries.value.filter(e => !e.isDir).length },
-  { id: 'size', icon: 'DataLine', iconClass: 'si-purple', label: '总大小', value: fmtSize(entries.value.reduce((sum, e) => sum + (e.size || 0), 0)) },
-]);
+// 统计卡片配置（仪表盘主题：4 张卡 + 趋势 chip）
+const auth = useAuthStore();
+const statCards = computed(() => {
+  const now = Date.now();
+  const weekMs = 7 * 24 * 3600 * 1000;
+  const recent = entries.value.filter(e => (e.mtime || 0) >= now - weekMs);
+  const prev = entries.value.filter(e => {
+    const m = e.mtime || 0;
+    return m < now - weekMs && m >= now - 2 * weekMs;
+  });
+  const totalSize = entries.value.reduce((sum, e) => sum + (e.size || 0), 0);
+  const recentFiles = recent.filter(e => !e.isDir).length;
+  const fileCount = entries.value.filter(e => !e.isDir).length;
+  const quota = Number((auth.user as any)?.quota) || 0;
+  const quotaPct = quota > 0 ? Math.min(100, Math.round((usageTotal.value / quota) * 100)) : null;
+  const diff = recent.length - prev.length;
+  return [
+    {
+      id: 'size',
+      icon: 'DataLine',
+      iconClass: 'si-blue',
+      label: '总容量',
+      value: fmtSize(totalSize),
+      trend: recent.length
+        ? { dir: 'up', text: `本周 +${recent.length}` }
+        : { dir: 'down', text: '近期无变化' },
+    },
+    {
+      id: 'files',
+      icon: 'Document',
+      iconClass: 'si-green',
+      label: '文件数',
+      value: fileCount,
+      trend: recentFiles
+        ? { dir: 'up', text: `本周 +${recentFiles}` }
+        : { dir: 'down', text: '无新增' },
+    },
+    {
+      id: 'recent',
+      icon: 'Upload',
+      iconClass: 'si-purple',
+      label: '本周修改（当前文件夹）',
+      value: recent.length,
+      trend: diff > 0
+        ? { dir: 'up', text: `较上期 +${diff}` }
+        : diff < 0
+          ? { dir: 'down', text: `较上期 ${diff}` }
+          : { dir: 'up', text: '与上期持平' },
+    },
+    {
+      id: 'quota',
+      icon: 'Odometer',
+      iconClass: 'si-orange',
+      label: '配额使用率',
+      value: quotaPct === null ? '不限' : `${quotaPct}%`,
+      trend: quotaPct === null
+        ? { dir: 'up', text: '无上限' }
+        : quotaPct >= 80
+          ? { dir: 'down', text: '接近上限' }
+          : { dir: 'up', text: '空间充足' },
+    },
+  ];
+});
+
+/* ---------- ⌘K 命令面板（仅 command 主题激活） ---------- */
+const cmdkOpen = ref(false);
+const cmdkQuery = ref('');
+const cmdkActiveIndex = ref(0);
+const cmdkInputRef = ref<HTMLInputElement | null>(null);
+
+/** 模糊打分：子串 > 子序列；不匹配返回 -1 */
+function cmdkScore(name: string, q: string): number {
+  const n = name.toLowerCase();
+  const s = q.trim().toLowerCase();
+  if (!s) return 100;
+  const idx = n.indexOf(s);
+  if (idx >= 0) return 10000 - idx; // 子串命中：位置越靠前分越高
+  let i = 0;
+  let score = 0;
+  let gap = 0;
+  for (let j = 0; j < n.length && i < s.length; j++) {
+    if (n[j] === s[i]) {
+      i++;
+      score += Math.max(0, 50 - gap);
+      gap = 0;
+    } else {
+      gap++;
+    }
+  }
+  if (i < s.length) return -1; // 非子序列
+  return score;
+}
+
+const cmdkResults = computed(() => {
+  const q = cmdkQuery.value.trim().toLowerCase();
+  return entries.value
+    .map((entry, index) => ({ entry, index, score: cmdkScore(entry.name, q) }))
+    .filter(r => r.score >= 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 20)
+    .map(r => r.entry);
+});
+
+watch(cmdkQuery, () => {
+  cmdkActiveIndex.value = 0;
+});
+
+function openCmdk() {
+  cmdkOpen.value = true;
+  cmdkQuery.value = '';
+  cmdkActiveIndex.value = 0;
+  nextTick(() => cmdkInputRef.value?.focus());
+}
+function closeCmdk() {
+  cmdkOpen.value = false;
+  cmdkQuery.value = '';
+  cmdkActiveIndex.value = 0;
+}
+// 离开 command 主题时自动关闭面板，避免状态残留
+watch(layoutType, (t) => {
+  if (t !== 'command') closeCmdk();
+});
+function executeCmdk() {
+  const entry = cmdkResults.value[cmdkActiveIndex.value];
+  if (!entry) return;
+  closeCmdk();
+  if (entry.isDir) {
+    path.value = entry.path;
+    load();
+  } else {
+    openPreview(entry);
+  }
+}
+function selectCmdk(i: number) {
+  cmdkActiveIndex.value = i;
+  executeCmdk();
+}
+/** 面板打开时的键盘导航：↑/↓ 移动、Enter 执行、Esc 关闭 */
+function onCmdkKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    closeCmdk();
+    e.preventDefault();
+  } else if (e.key === 'ArrowDown') {
+    const len = cmdkResults.value.length;
+    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value + 1) % len : 0;
+    e.preventDefault();
+  } else if (e.key === 'ArrowUp') {
+    const len = cmdkResults.value.length;
+    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value - 1 + len) % len : 0;
+    e.preventDefault();
+  } else if (e.key === 'Enter') {
+    executeCmdk();
+    e.preventDefault();
+  }
+}
+/** 全局快捷键：Meta+K / Control+K（仅 command 主题响应） */
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (layoutType.value !== 'command') return;
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if (cmdkOpen.value) closeCmdk();
+    else openCmdk();
+  }
+}
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalKeydown);
+});
+
+/** 便当盒布局：featured 2×2（首卡）+ medium 2×1（第 2/3 卡）+ 彩色 tile（每屏 2-3 张） */
+function bentoCardClass(index: number): string {
+  if (index === 0) return 'bento-featured tile-indigo';
+  if (index === 1 || index === 2) return 'bento-medium';
+  if (index === 4) return 'tile-amber';
+  if (index === 8) return 'tile-emerald';
+  return '';
+}
 
 
 
@@ -314,6 +494,15 @@ function fileType(name: string, isDir: boolean) {
 const sortKey = ref<'name' | 'size' | 'mtime'>('name');
 const sortOrder = ref<'asc' | 'desc'>('asc');
 
+/* 列表表头排序（F1）：el-table sort-change → 更新 sortKey/sortOrder 并请求服务端排序 */
+function onSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
+  if (order) {
+    sortKey.value = prop as 'name' | 'size' | 'mtime';
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc';
+  }
+  load();
+}
+
 /* ---------- 工具栏：搜索框 + 更多菜单（低频操作收纳） ---------- */
 function runSearchFromBox() {
   searchDialog.value = true;
@@ -333,20 +522,31 @@ function handleToolbarMore(cmd: string) {
   }
 }
 
+/* ---------- 移动端（<768px，P8）：仅 UI 状态 —— 全屏搜索覆盖层 + ⋯ 更多菜单；复用既有 handler ---------- */
+const mobileSearchOpen = ref(false);
+const mobileMoreRef = ref();
+/* ---------- 平板（768–1199px，F0）：行2 收敛为 [搜索][⋯]，视图/排序/上传/新建/存储 收进 ⋯ ElPopover ---------- */
+const tabletMoreRef = ref();
+
 const parent = computed(() =>
   path.value === '/' ? null : path.value.replace(/\/[^/]*\/?$/, '') || '/'
 );
 const crumbs = computed(() => {
-  const out = [{ name: '根目录', path: '/' }];
+  const full = [{ name: '根目录', path: '/' }];
   if (path.value !== '/') {
     const segs = path.value.split('/').filter(Boolean);
     let acc = '';
     for (const s of segs) {
       acc += '/' + s;
-      out.push({ name: s, path: acc });
+      full.push({ name: s, path: acc });
     }
   }
-  return out;
+  /* 深层路径（>3 级）：中段折叠为 "…"，保留 根目录 + … + 末两级（F3） */
+  if (full.length > 4) {
+    const firstHidden = full[1];
+    return [full[0], { name: '…', path: firstHidden.path, isEllipsis: true }, ...full.slice(-2)];
+  }
+  return full;
 });
 
 async function loadStorages() {
@@ -1231,6 +1431,13 @@ onMounted(async () => {
   loadAllTags();
   loadFavorites();
   loadQuickAccess();
+  // 异步加载真实配额用量（非 fast 模式，计算所有存储的 used 之和）
+  api('/storages')
+    .then((res: any) => {
+      const list = res?.storages || [];
+      usageTotal.value = list.reduce((s: number, st: any) => s + (st.used || 0), 0);
+    })
+    .catch(() => { /* 用量加载失败不阻塞，保持 0 */ });
 });
 </script>
 
@@ -1241,12 +1448,37 @@ onMounted(async () => {
     'files-command': layoutType === 'command',
     'files-topnav': layoutType === 'topnav'
   }">
-    <!-- 仪表盘统计卡片 -->
+    <!-- ⌘K 命令面板（仅 command 主题；Meta+K / Ctrl+K 打开，↑↓/Enter/Esc 键盘导航） -->
+    <div v-if="layoutType === 'command' && cmdkOpen" class="cmdk-panel">
+      <input
+        ref="cmdkInputRef"
+        v-model="cmdkQuery"
+        class="cmdk-input"
+        placeholder="搜索当前文件夹…"
+        @keydown="onCmdkKeydown"
+      />
+      <div class="cmdk-list">
+        <div
+          v-for="(item, i) in cmdkResults"
+          :key="item.path"
+          class="cmdk-item"
+          :class="{ active: i === cmdkActiveIndex }"
+          @click="selectCmdk(i)"
+          @mouseenter="cmdkActiveIndex = i"
+        >
+          <span class="cmdk-icon">{{ item.isDir ? '📁' : '📄' }}</span>
+          <span class="cmdk-name">{{ item.name }}</span>
+        </div>
+        <div v-if="cmdkResults.length === 0" class="cmdk-empty">无匹配结果</div>
+      </div>
+    </div>
+    <!-- 仪表盘统计卡片（4 张 + 趋势 chip + --i 入场 stagger） -->
     <div v-if="layoutType === 'dashboard'" class="stats-bar">
       <div
-        v-for="card in statCards"
+        v-for="(card, i) in statCards"
         :key="card.id"
         class="stat-card glass"
+        :style="{ '--i': i }"
       >
         <div class="stat-icon" :class="card.iconClass">
           <el-icon><component :is="card.icon" /></el-icon>
@@ -1255,73 +1487,267 @@ onMounted(async () => {
           <div class="stat-value">{{ card.value }}</div>
           <div class="stat-label">{{ card.label }}</div>
         </div>
+        <div class="stat-trend" :class="card.trend.dir">
+          {{ card.trend.text }}
+        </div>
+      </div>
+    </div>
+    <!-- 紧凑统计条（全主题 1 行；dashboard 主题保留大 4 卡，数据源同一 statCards） -->
+    <div v-if="layoutType !== 'dashboard'" class="stats-strip glass" aria-label="存储统计">
+      <!-- 配额（usageTotal/quota） -->
+      <div class="ss-item">
+        <span class="ss-icon si-orange"><el-icon><Odometer /></el-icon></span>
+        <span class="ss-label">配额</span>
+        <span class="ss-track" aria-hidden="true">
+          <span
+            class="ss-fill"
+            :class="{ warn: statCards[3].value !== '不限' && parseInt(statCards[3].value, 10) >= 80 }"
+            :style="{ width: statCards[3].value === '不限' ? '0%' : statCards[3].value }"
+          ></span>
+        </span>
+        <span class="ss-value">{{ statCards[3].value }}</span>
+      </div>
+      <span class="ss-sep" aria-hidden="true"></span>
+      <!-- 总量（totalSize） -->
+      <div class="ss-item">
+        <span class="ss-icon si-blue"><el-icon><DataLine /></el-icon></span>
+        <span class="ss-label">总量</span>
+        <span class="ss-value">{{ statCards[0].value }}</span>
+      </div>
+      <span class="ss-sep" aria-hidden="true"></span>
+      <!-- 文件数（fileCount） -->
+      <div class="ss-item">
+        <span class="ss-icon si-green"><el-icon><Document /></el-icon></span>
+        <span class="ss-label">文件数</span>
+        <span class="ss-value">{{ statCards[1].value }}</span>
+      </div>
+      <span class="ss-sep" aria-hidden="true"></span>
+      <!-- 本周趋势（recent.length） -->
+      <div class="ss-item">
+        <span class="ss-icon si-purple"><el-icon><Upload /></el-icon></span>
+        <span class="ss-label">本周</span>
+        <span class="ss-value">{{ statCards[2].value }}</span>
+        <span class="ss-chip" :class="statCards[2].trend.dir">{{ statCards[2].trend.text }}</span>
       </div>
     </div>
     <div class="files-glass glass">
+      <!-- 两行工具栏（Google Drive 模式）：行 1 面包屑 / 行 2 控件 -->
       <div class="toolbar">
-        <el-select v-model="storageId" size="default" class="storage-select" @change="onStorageChange">
-          <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
-        </el-select>
-        <el-breadcrumb separator="/" class="crumbs">
-          <el-breadcrumb-item v-for="c in crumbs" :key="c.path">
-            <a class="crumb" @click="goCrumb(c.path)">{{ c.name }}</a>
-          </el-breadcrumb-item>
-        </el-breadcrumb>
-        <div class="spacer" />
-        <!-- 全局搜索（常驻搜索框，回车或点击图标触发） -->
-        <div class="toolbar-search glass">
-          <el-icon class="toolbar-search-icon"><Search /></el-icon>
-          <input
-            v-model="searchQ"
-            class="toolbar-search-input"
-            placeholder="搜索文件…"
-            @keyup.enter="runSearchFromBox"
-          />
-          <button class="toolbar-search-btn" title="搜索" @click="runSearchFromBox">
-            <el-icon><Search /></el-icon>
-          </button>
+        <!-- 行 1：面包屑（全宽，深层路径溢出省略，保留末级可见） -->
+        <div class="toolbar-row1">
+          <el-breadcrumb separator="/" class="crumbs">
+            <el-breadcrumb-item v-for="c in crumbs" :key="c.path + (c.isEllipsis ? '-e' : '')">
+              <span v-if="c.isEllipsis" class="crumb-ellipsis" title="深层路径已折叠">…</span>
+              <a v-else class="crumb" @click="goCrumb(c.path)">{{ c.name }}</a>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
         </div>
-        <!-- 视图切换：网格 / 列表 / 照片 -->
-        <div class="view-toggle glass-btn">
-          <button class="vt-btn" :class="{ active: view === 'grid' }" title="网格视图" @click="view = 'grid'">
-            <el-icon><Grid /></el-icon>
-          </button>
-          <button class="vt-btn" :class="{ active: view === 'list' }" title="列表视图" @click="view = 'list'">
-            <el-icon><List /></el-icon>
-          </button>
-          <button class="vt-btn" :class="{ active: view === 'photo' }" title="照片视图" @click="view = 'photo'">
-            <el-icon><PictureFilled /></el-icon>
-          </button>
+        <!-- 行 2：控件（左：存储 + 搜索；右：视图 / 排序 / 上传 / 新建，右对齐） -->
+        <div class="toolbar-row2">
+          <el-select v-model="storageId" size="default" class="storage-select" @change="onStorageChange">
+            <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+          <!-- 全局搜索（常驻搜索框，回车或点击图标触发） -->
+          <div class="toolbar-search glass">
+            <el-icon class="toolbar-search-icon"><Search /></el-icon>
+            <input
+              v-model="searchQ"
+              class="toolbar-search-input"
+              placeholder="搜索文件…"
+              @keyup.enter="runSearchFromBox"
+            />
+            <button class="toolbar-search-btn" title="搜索" @click="runSearchFromBox">
+              <el-icon><Search /></el-icon>
+            </button>
+          </div>
+          <div class="toolbar-actions">
+            <!-- 视图切换：网格 / 列表 / 照片 -->
+            <div class="view-toggle glass-btn">
+              <button class="vt-btn" :class="{ active: view === 'grid' }" title="网格视图" @click="view = 'grid'">
+                <el-icon><Grid /></el-icon>
+              </button>
+              <button class="vt-btn" :class="{ active: view === 'list' }" title="列表视图" @click="view = 'list'">
+                <el-icon><List /></el-icon>
+              </button>
+              <button class="vt-btn" :class="{ active: view === 'photo' }" title="照片视图" @click="view = 'photo'">
+                <el-icon><PictureFilled /></el-icon>
+              </button>
+            </div>
+            <!-- 排序 -->
+            <el-select v-model="sortKey" class="sort-select" @change="load">
+              <el-option value="name" label="名称" />
+              <el-option value="size" label="大小" />
+              <el-option value="mtime" label="时间" />
+            </el-select>
+            <el-button size="small" @click="mkdirDialog = true; mkdirName = ''"><el-icon><FolderAdd /></el-icon>&nbsp;新建文件夹</el-button>
+            <el-button size="small" type="primary" @click="pickFiles"><el-icon><Upload /></el-icon>&nbsp;上传文件</el-button>
+            <!-- 更多：低频操作收纳（标签 / 刷新 / 多选） -->
+            <el-dropdown trigger="click" @command="handleToolbarMore">
+              <el-button size="small" :type="multiSelectMode ? 'warning' : 'default'">
+                <el-icon><MoreFilled /></el-icon>&nbsp;更多
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="tag-filter"><el-icon><PriceTag /></el-icon> 标签筛选</el-dropdown-item>
+                  <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon> 刷新</el-dropdown-item>
+                  <el-dropdown-item command="multi-select"><el-icon><Check /></el-icon> {{ multiSelectMode ? '退出多选' : '多选模式' }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <!-- 多选模式批量操作 -->
+            <el-button v-if="multiSelectMode" size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
+              <el-icon><Delete /></el-icon>&nbsp;删除选中
+            </el-button>
+            <el-button v-if="multiSelectMode" size="small" type="success" :disabled="!selected.length" :loading="batchDownloading" @click="doBatchDownload">
+              <el-icon><Download /></el-icon>&nbsp;批量下载
+            </el-button>
+            <el-button v-if="multiSelectMode" size="small" type="warning" :disabled="!selected.length" :loading="compressing" @click="doCompress">
+              <el-icon><Box /></el-icon>&nbsp;压缩
+            </el-button>
+          </div>
+          <!-- 平板（768–1199px，F0）：行2 仅留 [搜索][⋯] —— 存储/视图/排序/上传/新建 收进 ⋯ ElPopover -->
+          <div class="toolbar-tablet-actions">
+            <el-popover ref="tabletMoreRef" placement="bottom-end" width="220" trigger="click">
+              <template #reference>
+                <button class="tablet-more-btn glass-btn" aria-label="更多操作" aria-haspopup="true">
+                  <el-icon><MoreFilled /></el-icon>
+                </button>
+              </template>
+              <div class="mobile-more-menu">
+                <!-- 存储切换 -->
+                <div class="mm-item mm-sort">
+                  <span class="mm-sort-label">存储</span>
+                  <el-select v-model="storageId" size="small" @change="onStorageChange">
+                    <el-option v-for="s in storages" :key="s.id" :value="s.id" :label="s.name" />
+                  </el-select>
+                </div>
+                <!-- 视图切换 -->
+                <div class="mm-item mm-view">
+                  <button class="vt-btn" :class="{ active: view === 'grid' }" title="网格视图" @click="tabletMoreRef?.hide(); view = 'grid'"><el-icon><Grid /></el-icon></button>
+                  <button class="vt-btn" :class="{ active: view === 'list' }" title="列表视图" @click="tabletMoreRef?.hide(); view = 'list'"><el-icon><List /></el-icon></button>
+                  <button class="vt-btn" :class="{ active: view === 'photo' }" title="照片视图" @click="tabletMoreRef?.hide(); view = 'photo'"><el-icon><PictureFilled /></el-icon></button>
+                </div>
+                <!-- 排序 -->
+                <div class="mm-item mm-sort">
+                  <span class="mm-sort-label">排序</span>
+                  <el-select v-model="sortKey" size="small" @change="load">
+                    <el-option value="name" label="名称" />
+                    <el-option value="size" label="大小" />
+                    <el-option value="mtime" label="时间" />
+                  </el-select>
+                </div>
+                <div class="mm-sep"></div>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); pickFiles()">
+                  <el-icon><Upload /></el-icon><span>上传</span>
+                </button>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); mkdirDialog = true; mkdirName = ''">
+                  <el-icon><FolderAdd /></el-icon><span>新建文件夹</span>
+                </button>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); handleToolbarMore('multi-select')">
+                  <el-icon><Check /></el-icon><span>{{ multiSelectMode ? '退出多选' : '多选模式' }}</span>
+                </button>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); handleToolbarMore('tag-filter')">
+                  <el-icon><PriceTag /></el-icon><span>标签筛选</span>
+                </button>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); handleToolbarMore('refresh')">
+                  <el-icon><Refresh /></el-icon><span>刷新</span>
+                </button>
+                <template v-if="multiSelectMode">
+                  <div class="mm-sep"></div>
+                  <button class="mm-item" :disabled="!selected.length || batchDownloading" @click="tabletMoreRef?.hide(); doBatchDelete()">
+                    <el-icon><Delete /></el-icon><span>删除选中</span>
+                  </button>
+                  <button class="mm-item" :disabled="!selected.length || batchDownloading" @click="tabletMoreRef?.hide(); doBatchDownload()">
+                    <el-icon><Download /></el-icon><span>批量下载</span>
+                  </button>
+                  <button class="mm-item" :disabled="!selected.length || compressing" @click="tabletMoreRef?.hide(); doCompress()">
+                    <el-icon><Box /></el-icon><span>压缩</span>
+                  </button>
+                </template>
+              </div>
+            </el-popover>
+          </div>
+          <!-- 移动端（<768px，P8）：仅留 [搜索][⋯] —— 搜索为全屏覆盖层，操作收进 ⋯ ElPopover -->
+          <div class="toolbar-mobile-actions">
+            <button class="mobile-search-btn glass-btn" @click="mobileSearchOpen = true">
+              <el-icon><Search /></el-icon><span>搜索</span>
+            </button>
+            <el-popover ref="mobileMoreRef" placement="bottom-end" width="200" trigger="click">
+              <template #reference>
+                <button class="mobile-more-btn glass-btn" aria-label="更多操作" aria-haspopup="true">
+                  <el-icon><MoreFilled /></el-icon>
+                </button>
+              </template>
+              <div class="mobile-more-menu">
+                <button class="mm-item" @click="mobileMoreRef?.hide(); pickFiles()">
+                  <el-icon><Upload /></el-icon><span>上传</span>
+                </button>
+                <button class="mm-item" @click="mobileMoreRef?.hide(); mkdirDialog = true; mkdirName = ''">
+                  <el-icon><FolderAdd /></el-icon><span>新建文件夹</span>
+                </button>
+                <button class="mm-item" @click="mobileMoreRef?.hide(); handleToolbarMore('multi-select')">
+                  <el-icon><Check /></el-icon><span>{{ multiSelectMode ? '退出多选' : '多选模式' }}</span>
+                </button>
+                <div class="mm-item mm-sort">
+                  <span class="mm-sort-label">排序</span>
+                  <el-select v-model="sortKey" size="small" @change="load">
+                    <el-option value="name" label="名称" />
+                    <el-option value="size" label="大小" />
+                    <el-option value="mtime" label="时间" />
+                  </el-select>
+                </div>
+                <template v-if="multiSelectMode">
+                  <div class="mm-sep"></div>
+                  <button class="mm-item" :disabled="!selected.length || batchDownloading" @click="mobileMoreRef?.hide(); doBatchDelete()">
+                    <el-icon><Delete /></el-icon><span>删除选中</span>
+                  </button>
+                  <button class="mm-item" :disabled="!selected.length || batchDownloading" @click="mobileMoreRef?.hide(); doBatchDownload()">
+                    <el-icon><Download /></el-icon><span>批量下载</span>
+                  </button>
+                  <button class="mm-item" :disabled="!selected.length || compressing" @click="mobileMoreRef?.hide(); doCompress()">
+                    <el-icon><Box /></el-icon><span>压缩</span>
+                  </button>
+                </template>
+              </div>
+            </el-popover>
+          </div>
         </div>
-        <el-button size="small" @click="mkdirDialog = true; mkdirName = ''"><el-icon><FolderAdd /></el-icon>&nbsp;新建文件夹</el-button>
-        <el-button size="small" type="primary" @click="pickFiles"><el-icon><Upload /></el-icon>&nbsp;上传文件</el-button>
-        <!-- 更多：低频操作收纳（排序 / 标签 / 刷新 / 多选） -->
-        <el-dropdown trigger="click" @command="handleToolbarMore">
-          <el-button size="small" :type="multiSelectMode ? 'warning' : 'default'">
-            <el-icon><MoreFilled /></el-icon>&nbsp;更多
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="sort-name" :disabled="sortKey === 'name'">按名称排序</el-dropdown-item>
-              <el-dropdown-item command="sort-size" :disabled="sortKey === 'size'">按大小排序</el-dropdown-item>
-              <el-dropdown-item command="sort-mtime" :disabled="sortKey === 'mtime'">按时间排序</el-dropdown-item>
-              <el-dropdown-item command="tag-filter"><el-icon><PriceTag /></el-icon> 标签筛选</el-dropdown-item>
-              <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon> 刷新</el-dropdown-item>
-              <el-dropdown-item command="multi-select"><el-icon><Check /></el-icon> {{ multiSelectMode ? '退出多选' : '多选模式' }}</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <!-- 多选模式批量操作 -->
-        <el-button v-if="multiSelectMode" size="small" type="danger" :disabled="!selected.length" @click="doBatchDelete">
-          <el-icon><Delete /></el-icon>&nbsp;删除选中
-        </el-button>
-        <el-button v-if="multiSelectMode" size="small" type="success" :disabled="!selected.length" :loading="batchDownloading" @click="doBatchDownload">
-          <el-icon><Download /></el-icon>&nbsp;批量下载
-        </el-button>
-        <el-button v-if="multiSelectMode" size="small" type="warning" :disabled="!selected.length" :loading="compressing" @click="doCompress">
-          <el-icon><Box /></el-icon>&nbsp;压缩
-        </el-button>
+      </div>
 
+      <!-- 移动端（<768px，P8）：全屏搜索覆盖层（顶栏 + 输入 + 结果列表）；复用 searchQ/doSearch -->
+      <div v-if="mobileSearchOpen" class="mobile-search-overlay">
+        <div class="ms-topbar">
+          <button class="ms-close" aria-label="关闭搜索" @click="mobileSearchOpen = false">
+            <el-icon><Close /></el-icon>
+          </button>
+          <div class="ms-input-wrap">
+            <el-icon class="ms-icon"><Search /></el-icon>
+            <input
+              v-model="searchQ"
+              class="ms-input"
+              placeholder="搜索文件…"
+              @keyup.enter="doSearch"
+            />
+          </div>
+          <button class="ms-go" :disabled="searching" @click="doSearch">
+            {{ searching ? '搜索中…' : '搜索' }}
+          </button>
+        </div>
+        <div class="ms-results" v-loading="searching">
+          <div v-if="!searching && searchResults.length === 0" class="ms-empty">无结果</div>
+          <div
+            v-for="r in searchResults"
+            :key="r.entry.path"
+            class="ms-item"
+            @click="openSearchResult(r); mobileSearchOpen = false"
+          >
+            <el-icon class="ms-f-icon"><Folder v-if="r.entry.isDir" /><Document v-else /></el-icon>
+            <div class="ms-f-info">
+              <div class="ms-f-name">{{ r.entry.name }}</div>
+              <div class="ms-f-path">{{ r.entry.path }}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 选中信息栏（仅多选模式） -->
@@ -1343,10 +1769,13 @@ onMounted(async () => {
         <!-- 真实文件：带淡入动画 -->
         <template v-else>
         <div
-          v-for="row in entries"
+          v-for="(row, i) in entries"
           :key="row.path"
           class="file-card glass-card file-fade-in"
-          :class="{ selected: isSelected(row) }"
+          :class="[
+            { selected: isSelected(row) },
+            layoutType === 'bento' ? bentoCardClass(i) : ''
+          ]"
           @click="onCardClick(row)"
           @contextmenu="showContextMenu($event, row)"
         >
@@ -1441,9 +1870,10 @@ onMounted(async () => {
         row-key="path"
         @selection-change="(v: any[]) => (selected = v)"
         @row-contextmenu="(row: any, col: any, event: MouseEvent) => showContextMenu(event, row.row)"
+        @sort-change="onSortChange"
       >
         <el-table-column v-if="multiSelectMode" type="selection" width="40" />
-        <el-table-column label="名称" min-width="300">
+        <el-table-column prop="name" label="名称" min-width="300" sortable>
           <template #default="{ row }">
             <el-icon class="f-icon" :color="fileType(row.name, row.isDir).color">
               <component :is="fileType(row.name, row.isDir).icon" />
@@ -1451,10 +1881,10 @@ onMounted(async () => {
             <span class="f-name" :class="{ dir: row.isDir }" @click.stop="openDir(row)">{{ row.name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="120">
+        <el-table-column prop="size" label="大小" width="120" sortable>
           <template #default="{ row }">{{ row.isDir ? '-' : fmtSize(row.size) }}</template>
         </el-table-column>
-        <el-table-column label="修改时间" width="180">
+        <el-table-column prop="mtime" label="修改时间" width="180" sortable>
           <template #default="{ row }">{{ fmtTime(row.mtime) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="330">
@@ -2035,6 +2465,101 @@ onMounted(async () => {
   color: var(--text-secondary);
 }
 
+/* ---------- 紧凑统计条（全主题 1 行；dashboard 主题保留大 4 卡，数据源同一 statCards） ---------- */
+.stats-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border-radius: var(--card-radius);
+  margin-bottom: 16px;
+}
+/* 单行布局仅 ≥1200px（F0：768–1199px 平板带保持 2 列网格，避免统计条横向溢出） */
+@media (min-width: 1200px) {
+  .stats-strip {
+    display: flex;
+    gap: 0;
+    padding: 12px 18px;
+  }
+}
+.ss-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.ss-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.ss-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.ss-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+/* 配额进度槽（████，宽度 = usageTotal/quota） */
+.ss-track {
+  flex: 0 1 96px;
+  min-width: 48px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+.ss-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #8a93fb);
+  transition: width 0.3s ease;
+}
+.ss-fill.warn {
+  background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+/* 趋势 chip（复用 stat-trend 涨绿/跌红语义） */
+.ss-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.ss-chip.up {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.ss-chip.down {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+/* 分隔符：仅桌面单行布局（≥1200px）显示 */
+.ss-sep {
+  display: none;
+}
+@media (min-width: 1200px) {
+  .ss-sep {
+    display: block;
+    width: 1px;
+    height: 22px;
+    margin: 0 16px;
+    background: var(--glass-border);
+  }
+}
+
 /* 目录选择器 */
 .dir-picker {
   display: flex;
@@ -2162,26 +2687,62 @@ onMounted(async () => {
 .files-glass {
   border-radius: 20px;
   padding: 18px;
-  min-height: calc(100vh - 100px);
+  min-height: 0; /* P10：移除 calc(100vh - 100px) 魔数 */
   position: relative;
   z-index: 1;
+  /* 两行工具栏高度变量（spec §2/§3；默认 40/48） */
+  --toolbar-h1: 40px;
+  --toolbar-h2: 48px;
+}
+/* top-nav：行 2 更紧凑（spec §2） */
+.files-topnav .files-glass {
+  --toolbar-h2: 44px;
+}
+/* command：最紧凑（spec §2） */
+.files-command .files-glass {
+  --toolbar-h1: 36px;
+  --toolbar-h2: 40px;
 }
 .toolbar {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 18px;
-  flex-wrap: wrap;
+}
+/* 行 1：面包屑（全宽，溢出省略，保留末级可见） */
+.toolbar-row1 {
+  display: flex;
+  align-items: center;
+  height: var(--toolbar-h1);
+  min-width: 0;
+}
+/* 行 2：控件（左：存储 + 搜索；右：.toolbar-actions 右对齐） */
+.toolbar-row2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--toolbar-h2);
 }
 .storage-select {
-  width: 200px;
-}
-.spacer {
-  flex: 1;
+  width: 150px;
+  flex-shrink: 0;
 }
 .crumbs {
   flex: 1;
-  min-width: 120px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 深层路径截断（P2）：项右对齐 + 不收缩，裁剪前级、保留"…/父级/当前"可见 */
+.crumbs :deep(.el-breadcrumb__list) {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.crumbs :deep(.el-breadcrumb__item) {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .crumb {
   color: var(--accent);
@@ -2189,6 +2750,72 @@ onMounted(async () => {
 }
 .crumb:hover {
   filter: brightness(1.1);
+}
+/* 深层路径折叠省略号（F3）：非交互，弱色 */
+.crumb-ellipsis {
+  color: var(--text-secondary);
+  cursor: default;
+  opacity: 0.7;
+}
+/* 行 2 右侧动作组（视图切换 / 排序 / 上传 / 新建，右对齐） */
+.toolbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ---------- 平板带（768–1199px，F0）：行2 收敛为 [搜索][⋯]，避免横向滚动 ----------
+   存储 / 视图切换 / 排序 / 上传 / 新建 全部收进 ⋯ ElPopover（复用移动端 ⋯ 菜单模式）。
+   ≥1200px 行2 全展开（存储 + 搜索 + 视图 + 排序 + 上传/新建）。 */
+.toolbar-tablet-actions {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.tablet-more-btn {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+.tablet-more-btn:hover {
+  color: var(--text);
+}
+/* ⋯ 菜单内的视图切换组（复用 .vt-btn 视觉） */
+.mm-view {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.mm-view .vt-btn {
+  width: 36px;
+  height: 32px;
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+  .toolbar-row2 .storage-select,
+  .toolbar-row2 .toolbar-actions {
+    display: none;
+  }
+  .toolbar-tablet-actions {
+    display: flex;
+  }
+  /* command 主题：保留自身最小工具栏（存储/排序/视图切换），不用 ⋯ 菜单 */
+  .files-command .toolbar-row2 .storage-select {
+    display: inline-flex;
+  }
+  .files-command .toolbar-row2 .toolbar-actions {
+    display: flex;
+  }
+  .files-command .toolbar-tablet-actions {
+    display: none;
+  }
 }
 
 /* 全局搜索框（常驻） */
@@ -2198,8 +2825,7 @@ onMounted(async () => {
   gap: 6px;
   padding: 4px 10px;
   border-radius: 12px;
-  min-width: 220px;
-  max-width: 320px;
+  width: clamp(220px, 24vw, 360px);
 }
 .toolbar-search-icon {
   color: var(--text-secondary);
@@ -2212,7 +2838,7 @@ onMounted(async () => {
   outline: none;
   font-size: 13px;
   color: var(--text);
-  min-width: 120px;
+  min-width: 100px;
 }
 .toolbar-search-input::placeholder {
   color: var(--text-secondary);
@@ -2430,15 +3056,15 @@ onMounted(async () => {
   color: var(--accent);
 }
 
-/* 网格视图 */
+/* 网格视图（P4）：auto-fill + clamp 列宽；gap/pad/radius 跟随主题 --card-* 变量 */
 .file-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(150px, 18vw, 220px), 1fr));
+  gap: var(--card-gap, 14px);
 }
 .file-card {
-  border-radius: 18px;
-  padding: 18px 14px;
+  border-radius: var(--card-radius, 18px);
+  padding: var(--card-pad, 18px 14px);
   cursor: pointer;
   text-align: center;
   display: flex;
@@ -2454,6 +3080,16 @@ onMounted(async () => {
 }
 .file-card.selected .fc-name {
   color: var(--accent);
+}
+/* 移动端（<768px，F5）：显式 2 列 + 紧凑间距/内边距 */
+@media (max-width: 767px) {
+  .file-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .file-card {
+    padding: 12px 10px;
+  }
 }
 
 /* ---------- 骨架屏 + 淡入动画 ---------- */
@@ -2765,27 +3401,168 @@ onMounted(async () => {
   opacity: 1;
 }
 
-/* ---------- 便当盒布局：混合大小卡片 ---------- */
-.files-bento .file-grid {
+/* ---------- 仪表盘布局：统计卡网格（4 列 + 趋势 chip + 入场 stagger） ---------- */
+.files-dashboard .stats-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
 }
-.files-bento .file-card {
-  border-radius: 20px;
-  padding: 20px;
+@media (max-width: 1199px) {
+  .files-dashboard .stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
-/* 每第 5 个卡片跨 2 列 */
-.files-bento .file-card:nth-child(5n+1) {
-  grid-column: span 2;
+@media (max-width: 767px) {
+  .files-dashboard .stats-bar {
+    grid-template-columns: 1fr;
+  }
 }
-/* 每第 7 个卡片跨 2 行 */
-.files-bento .file-card:nth-child(7n+3) {
-  grid-row: span 2;
+.files-dashboard .stat-card {
+  min-height: 108px;
+  border-radius: 12px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.6), rgba(51, 65, 85, 0.6));
+  animation: dash-in 240ms ease-out both;
+  animation-delay: calc(var(--i) * 40ms);
+}
+.files-dashboard .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  transition: transform 150ms;
+}
+/* 点睛：统计卡 hover 时数值轻微放大 */
+.files-dashboard .stat-card:hover .stat-value {
+  transform: scale(1.02);
+}
+.files-dashboard .stat-label {
+  font-size: 13px;
+}
+/* 趋势 chip：涨绿 / 跌红 */
+.stat-trend {
+  margin-left: auto;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.stat-trend.up {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.stat-trend.down {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+/* 第 4 张卡（配额）图标底色 */
+.si-orange {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+}
+@keyframes dash-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
 }
 
-/* ---------- 命令式布局：极简列表 ---------- */
-.files-command .toolbar {
+/* ---------- 便当盒布局：mobile-first bento 网格（P5：3 断点） ----------
+   <768px：2 列（featured/medium 通栏）；768–1199px：3 列（featured 2×2、medium 2）；≥1200px：4 列 */
+.files-bento .file-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+/* 普通卡：实底白 + 1px 边框，非玻璃 */
+.files-bento .file-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 20px;
+}
+/* 次级文本对比度（F7）：白卡 meta 加深至 ≥4.5:1（tile 卡由下方 color:inherit 规则覆盖） */
+.files-bento .file-card .fc-meta {
+  color: #5b6b82;
+}
+/* featured：大卡（首卡；移动端通栏，≥768px 为 2×2） */
+.files-bento .bento-featured {
+  grid-column: span 2;
+  min-height: 340px;
+  background: #4f46e5;
+  color: #ffffff;
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+}
+/* 点睛：featured hover 轻微上浮 + 强调投影 */
+.files-bento .bento-featured:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(79, 70, 229, 0.3);
+}
+/* medium：2×1 中卡（第 2/3 卡） */
+.files-bento .bento-medium {
+  grid-column: span 2;
+  min-height: 168px;
+}
+/* 彩色 tile（每屏 2-3 张） */
+.files-bento .tile-indigo {
+  background: #4f46e5;
+  color: #fff;
+}
+.files-bento .tile-amber {
+  background: #f59e0b;
+  color: #451a03;
+}
+.files-bento .tile-emerald {
+  background: #10b981;
+  color: #052e16;
+}
+/* 点睛：tile 卡 hover 颜色轻微加深 */
+.files-bento .tile-indigo,
+.files-bento .tile-amber,
+.files-bento .tile-emerald {
+  transition: filter 150ms ease-out;
+}
+.files-bento .tile-indigo:hover,
+.files-bento .tile-amber:hover,
+.files-bento .tile-emerald:hover {
+  filter: brightness(1.05);
+}
+/* tile 卡内文字跟随 tile 配色（覆盖通用 var(--text)） */
+.files-bento .bento-featured .fc-name,
+.files-bento .tile-indigo .fc-name,
+.files-bento .tile-amber .fc-name,
+.files-bento .tile-emerald .fc-name {
+  color: inherit;
+}
+.files-bento .bento-featured .fc-meta,
+.files-bento .tile-indigo .fc-meta,
+.files-bento .tile-amber .fc-meta,
+.files-bento .tile-emerald .fc-meta {
+  color: inherit;
+  opacity: 0.85;
+}
+/* 平板 768–1199px（P5）：3 列，featured 2×2，medium 2 */
+@media (min-width: 768px) {
+  .files-bento .file-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .files-bento .bento-featured {
+    grid-row: span 2;
+  }
+}
+/* 桌面 ≥1200px：4 列 */
+@media (min-width: 1200px) {
+  .files-bento .file-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ---------- 命令式布局：最小工具栏 + 真 ⌘K 命令面板 ----------
+   P6：行 2 仅保留 [存储切换][排序][视图切换]（搜索/上传/新建/更多/批量隐藏）；⌘K 面板不变 */
+.files-command .toolbar-search {
+  display: none;
+}
+.files-command .toolbar-actions :deep(.el-button),
+.files-command .toolbar-actions :deep(.el-dropdown) {
   display: none;
 }
 .files-command .file-grid {
@@ -2817,7 +3594,7 @@ onMounted(async () => {
 .files-command .fc-name {
   flex: 1;
   font-size: 14px;
-  font-family: inherit;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
 }
 .files-command .fc-meta {
   font-size: 12px;
@@ -2826,20 +3603,74 @@ onMounted(async () => {
 .files-command .fc-actions {
   display: none;
 }
-.files-command::before {
-  content: '⌘ 搜索文件...';
-  display: block;
-  padding: 12px 16px;
+
+/* ⌘K 命令面板（等宽仅 .fc-name / .cmdk-*，body 保持 sans） */
+.cmdk-panel {
+  position: fixed;
+  top: 20vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(480px, calc(100vh - 24vh));
+  background: #1e2128;
+  border: 1px solid #2e323c;
+  border-radius: 8px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+}
+.cmdk-input {
+  height: 48px;
   font-size: 16px;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--glass-border);
-  margin-bottom: 8px;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #2e323c;
+  color: #e6e8ec;
+  padding: 0 16px;
+  outline: none;
+}
+.cmdk-list {
+  overflow-y: auto;
+  padding: 8px;
+}
+.cmdk-item {
+  height: 40px;
+  font-size: 14px;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #e6e8ec;
+  border-left: 2px solid transparent; /* 占位：active 指示条不引起行内容位移 */
+  transition: background 80ms;
+}
+.cmdk-item.active {
+  background: #262a33;
+  border-left: 2px solid #ff6b35; /* 点睛：active 行左侧橙色指示条 */
+}
+.cmdk-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cmdk-empty {
+  padding: 16px 12px;
+  font-size: 14px;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+  color: #9aa1ad;
+  text-align: center;
 }
 
-/* ---------- 顶部导航布局：更紧凑 ---------- */
+/* ---------- 顶部导航布局：更紧凑（P9：与 spec §8 topnav 观感统一） ---------- */
 .files-topnav .files-glass {
   border-radius: 0;
   margin: 0;
+  padding: 16px;
 }
 
 .stat-card {
@@ -2908,5 +3739,219 @@ onMounted(async () => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* ---------- 移动端（<768px，P8）：工具栏仅留 [搜索][⋯]，搜索为全屏覆盖层 ---------- */
+.toolbar-mobile-actions {
+  display: none;
+}
+.mobile-search-overlay {
+  display: none;
+}
+@media (max-width: 767px) {
+  /* 桌面控件隐藏，仅留移动端动作组 */
+  .toolbar-row2 .storage-select,
+  .toolbar-row2 .toolbar-search,
+  .toolbar-row2 .toolbar-actions {
+    display: none;
+  }
+  .toolbar-mobile-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .mobile-search-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 44px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .mobile-more-btn {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  /* ⋯ 更多菜单（ElPopover 内容） */
+  .mobile-more-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .mm-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    width: 100%;
+    text-align: left;
+    transition: background 0.15s;
+  }
+  .mm-item:hover {
+    background: var(--accent-soft);
+  }
+  .mm-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .mm-item .el-icon {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .mm-sort {
+    gap: 8px;
+  }
+  .mm-sort-label {
+    font-size: 14px;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .mm-sort .el-select {
+    flex: 1;
+    width: auto;
+  }
+  .mm-sep {
+    height: 1px;
+    background: var(--glass-border);
+    margin: 4px 0;
+  }
+  /* 全屏搜索覆盖层 */
+  .mobile-search-overlay {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: var(--surface, #0b0e14);
+  }
+  .ms-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--glass-border);
+  }
+  .ms-close {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .ms-input-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 12px;
+    border-radius: 12px;
+    background: var(--glass-bg);
+    min-width: 0;
+  }
+  .ms-icon {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .ms-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    outline: none;
+    font-size: 15px;
+    color: var(--text);
+    min-width: 0;
+  }
+  .ms-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.7;
+  }
+  .ms-go {
+    height: 44px;
+    padding: 0 18px;
+    border-radius: 12px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .ms-go:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .ms-results {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px 24px;
+  }
+  .ms-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .ms-item:hover {
+    background: var(--accent-soft);
+  }
+  .ms-f-icon {
+    color: var(--accent);
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+  .ms-f-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .ms-f-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ms-f-path {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ms-empty {
+    padding: 48px 16px;
+    text-align: center;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
 }
 </style>

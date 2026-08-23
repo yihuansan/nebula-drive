@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
-import { api } from './api';
+import { api, fmtSize } from './api';
 import { useTheme, THEMES, type ThemeKey } from './useTheme';
 import { ElMessage, ElMessageBox } from 'element-plus';
 
@@ -20,6 +20,38 @@ const layoutType = computed(() => {
 const appName = ref('NebulaDrive 星云网盘');
 const collapsed = ref(false);
 const showThemePicker = ref(false);
+
+/* ---------- 侧栏底部存储条（P7）：与 Files.vue 的 usageTotal/quota 同源 ---------- */
+const usageTotal = ref(0);
+const quota = computed(() => Number((auth.user as any)?.quota) || 0);
+const storagePct = computed(() =>
+  quota.value > 0 ? Math.min(100, Math.round((usageTotal.value / quota.value) * 100)) : null
+);
+
+/* ---------- 移动端抽屉（P8）：离屏抽屉，Esc / 点外部关闭，body 锁滚动 ---------- */
+const drawerOpen = ref(false);
+const drawerPrevCollapsed = ref(false);
+function openDrawer() {
+  drawerPrevCollapsed.value = collapsed.value;
+  collapsed.value = false; // 抽屉内展示完整标签
+  drawerOpen.value = true;
+}
+function closeDrawer() {
+  drawerOpen.value = false;
+  collapsed.value = drawerPrevCollapsed.value;
+}
+function onDrawerEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape' && drawerOpen.value) closeDrawer();
+}
+onMounted(() => {
+  document.addEventListener('keydown', onDrawerEsc);
+  watch(drawerOpen, (open) => {
+    document.body.style.overflow = open ? 'hidden' : '';
+  });
+});
+onUnmounted(() => {
+  document.removeEventListener('keydown', onDrawerEsc);
+});
 
 // 主题选择器选项（来自 useTheme 的 THEMES 元数据）
 const themeOptions = Object.entries(THEMES).map(([key, v]) => ({ key, ...v }));
@@ -131,14 +163,14 @@ const perm = (key: string) => auth.hasPerm(key);
 
 const pageTitle = computed(() => {
   const map: Record<string, string> = {
-    '/': '文件管理',
-    '/recent': '最近全部',
+    '/': '我的文件',
+    '/recent': '最近',
     '/favorites': '我的收藏',
     '/quick-access': '快捷访问',
     '/media': '视频文档',
     '/hidden': '隐藏空间',
     '/subscriptions': '转存和订阅',
-    '/shares': '我的分享',
+    '/shares': '共享',
     '/recycle': '回收站',
     '/admin/users': '用户管理',
     '/admin/roles': '角色权限',
@@ -154,14 +186,14 @@ const pageTitle = computed(() => {
 
 // 侧边栏菜单（perm = 所需权限点；无 perm 的项始终显示）
 const mainMenuAll = [
-  { path: '/', label: '文件管理', icon: 'Folder', perm: 'files:view' },
-  { path: '/recent', label: '最近全部', icon: 'Clock', perm: 'files:view' },
+  { path: '/', label: '我的文件', icon: 'Folder', perm: 'files:view' },
+  { path: '/recent', label: '最近', icon: 'Clock', perm: 'files:view' },
   { path: '/favorites', label: '我的收藏', icon: 'StarFilled', perm: 'files:view' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star', perm: 'files:view' },
   { path: '/media', label: '视频文档', icon: 'VideoCamera', perm: 'files:view' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock', perm: 'files:view' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download', perm: 'files:share' },
-  { path: '/shares', label: '我的分享', icon: 'Share', perm: 'files:share' },
+  { path: '/shares', label: '共享', icon: 'Share', perm: 'files:share' },
   { path: '/share-collab', label: '共享管理', icon: 'User', perm: 'files:share' },
   { path: '/recycle', label: '回收站', icon: 'Delete', perm: 'recycle:view' },
   { path: '/profile', label: '我的资料', icon: 'User', perm: 'files:view' },
@@ -273,6 +305,13 @@ function toggleCustomizeNav() {
 onMounted(async () => {
   if (auth.token) {
     await auth.me();
+    // 侧栏底部存储条：所有存储 used 之和（与 Files.vue 同源）
+    api('/storages')
+      .then((res: any) => {
+        const list = res?.storages || [];
+        usageTotal.value = list.reduce((s: number, st: any) => s + (st.used || 0), 0);
+      })
+      .catch(() => { /* 用量加载失败不阻塞页面 */ });
   }
   try {
     const s = await api('/settings');
@@ -363,8 +402,10 @@ function applyBackground(s?: any) {
     <div class="app-overlay" aria-hidden="true" />
 
     <div class="layout" :class="{ 'layout-topnav': layoutType === 'topnav' }">
+      <!-- 移动端（P8）：抽屉遮罩，点击关闭 -->
+      <div v-if="drawerOpen" class="drawer-mask" @click="closeDrawer" />
       <!-- 侧边栏（sidebar/dashboard/bento 布局） -->
-      <aside v-if="layoutType !== 'topnav'" class="aside glass" :class="{ collapsed }">
+      <aside v-if="layoutType !== 'topnav'" class="aside glass" :class="{ collapsed, 'drawer-open': drawerOpen }">
         <div class="logo">
           <div class="logo-badge">
             <el-icon :size="20"><Cloudy /></el-icon>
@@ -436,6 +477,16 @@ function applyBackground(s?: any) {
         </div>
 
         <div class="aside-footer">
+          <!-- 底部存储进度条（P7）：usageTotal/quota 同源，所有主题可见 -->
+          <div class="aside-storage">
+            <div class="storage-label">
+              <span>已用 {{ fmtSize(usageTotal) }}</span>
+              <span>{{ quota ? '配额 ' + fmtSize(quota) : '不限' }}</span>
+            </div>
+            <div class="storage-track">
+              <div class="storage-fill" :style="{ width: (storagePct ?? 0) + '%' }"></div>
+            </div>
+          </div>
           <div class="user-chip">
             <div class="avatar">
               <img v-if="auth.user?.avatar" :src="auth.user.avatar" alt="avatar" />
@@ -510,7 +561,13 @@ function applyBackground(s?: any) {
           </div>
         </div>
         <header class="header glass" v-if="layoutType !== 'topnav'">
-          <div class="page-title">{{ pageTitle }}</div>
+          <div class="header-left">
+            <!-- 移动端（P8）：☰ 打开离屏抽屉 -->
+            <button class="menu-open-btn glass-btn" aria-label="打开导航菜单" @click="openDrawer">
+              <el-icon><Menu /></el-icon>
+            </button>
+            <div class="page-title">{{ pageTitle }}</div>
+          </div>
           <div class="header-right">
             <div class="theme-wrap">
               <button class="theme-btn glass-btn" :title="'当前主题：' + THEMES[theme]?.label + '，点击切换'" @click="showThemePicker = !showThemePicker">
@@ -577,6 +634,7 @@ function applyBackground(s?: any) {
   overflow: hidden;
 }
 .layout {
+  --sidebar-width: 240px;
   height: 100%;
   display: flex;
   gap: 14px;
@@ -685,7 +743,7 @@ function applyBackground(s?: any) {
 
 /* ---------- 侧边栏 ---------- */
 .aside {
-  width: 236px;
+  width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
   border-radius: 22px;
@@ -1106,5 +1164,85 @@ function applyBackground(s?: any) {
 }
 :global(.release-notes strong) {
   color: var(--accent);
+}
+
+/* ---------- 侧栏底部存储条（P7）：所有主题可见 ---------- */
+.aside-storage {
+  padding: 10px 10px 0;
+}
+.storage-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.storage-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--glass-bg);
+  overflow: hidden;
+}
+.storage-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.aside.collapsed .aside-storage .storage-label {
+  display: none;
+}
+
+/* ---------- 移动端（<768px，P8）：侧栏 → 离屏抽屉 ---------- */
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.menu-open-btn {
+  display: none;
+}
+.drawer-mask {
+  display: none;
+}
+@media (max-width: 767px) {
+  .menu-open-btn {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    place-items: center;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .drawer-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .aside,
+  .aside.collapsed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    border-radius: 0 22px 22px 0;
+  }
+  .aside.drawer-open {
+    transform: translateX(0);
+  }
+  .collapse-btn {
+    display: none;
+  }
 }
 </style>

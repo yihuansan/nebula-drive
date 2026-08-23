@@ -2,10 +2,11 @@
 // 通过子进程调用同步引擎 CLI（apps/sync/dist/cli.js），以 --json 输出解析结构化数据。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -16,20 +17,26 @@ struct AppState {
 }
 
 fn find_node() -> Result<PathBuf, String> {
+    // S6: 解析顺序 NEBULA_NODE（显式指定，最可信）→ 官方默认安装路径 → 最后才扫 PATH。
+    // 扫描 PATH 存在被恶意 PATH 条目劫持的风险，仅作兜底并打印告警。
     if let Ok(p) = std::env::var("NEBULA_NODE") {
         return Ok(PathBuf::from(p));
+    }
+    let known = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
+    if known.is_file() {
+        return Ok(known);
     }
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in path_var.split(';') {
             let cand = Path::new(dir).join("node.exe");
             if cand.is_file() {
+                eprintln!(
+                    "[安全警告] 从 PATH 扫描命中 node.exe：{}（PATH 可被劫持，建议显式设置 NEBULA_NODE）",
+                    cand.display()
+                );
                 return Ok(cand);
             }
         }
-    }
-    let fallback = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
-    if fallback.is_file() {
-        return Ok(fallback);
     }
     Err("未找到 node.exe：请安装 Node.js 或设置 NEBULA_NODE 环境变量".into())
 }
@@ -70,7 +77,16 @@ fn state_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(d)
 }
 
-fn run_cli(state_dir: &Path, args: &[String], json: bool) -> Result<String, String> {
+/// 把子进程管道读到 EOF 并收集为字符串（进程退出后管道关闭，线程自然结束）
+fn read_pipe_to_string<R: Read + Send>(mut pipe: R) -> String {
+    let mut buf = String::new();
+    let _ = pipe.read_to_string(&mut buf);
+    buf
+}
+
+/// 执行同步引擎 CLI 并返回 stdout。
+/// env: 需要以环境变量（而非 argv）传递给子进程的敏感值，如 NEBULA_PASSWORD / NEBULA_TOKEN。
+fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String)]) -> Result<String, String> {
     let node = find_node()?;
     let cli = find_cli()?;
     let mut cmd = Command::new(&node);
@@ -83,10 +99,50 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool) -> Result<String, Stri
     if json {
         cmd.arg("--json");
     }
-    let output = cmd.output().map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
+    // S1/S2: 敏感值走环境变量，避免出现在 argv（Windows 进程列表可见）
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("无法获取子进程 stdout")?;
+    let stderr = child.stderr.take().ok_or("无法获取子进程 stderr")?;
+    // 后台线程收集输出：防止输出撑满管道缓冲区导致进程阻塞、主线程死锁
+    let stdout_task = std::thread::spawn(move || read_pipe_to_string(stdout));
+    let stderr_task = std::thread::spawn(move || read_pipe_to_string(stderr));
+
+    // B2: 30s 超时 —— Server 无响应时不再让 UI 永久 loading。
+    // 用 try_wait 轮询实现（无需额外 crate）：到点仍未退出则判定超时。
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut status = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s); // 子进程已退出并被回收
+                break;
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break; // 超时
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("等待同步引擎失败: {e}")),
+        }
+    }
+    if status.is_none() {
+        // 超时：杀掉挂起的子进程，避免残留
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = stdout_task.join();
+        let _ = stderr_task.join();
+        return Err("同步引擎执行超时（30s）：服务器可能无响应，请稍后重试".into());
+    }
+    let status = status.unwrap();
+    let stdout = stdout_task.join().map_err(|_| "读取子进程输出失败".to_string())?;
+    let stderr = stderr_task.join().map_err(|_| "读取子进程输出失败".to_string())?;
+    if !status.success() {
         let msg = format!("{}{}", stdout, stderr).trim().to_string();
         return Err(if msg.is_empty() {
             "同步引擎执行失败".into()
@@ -100,7 +156,9 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool) -> Result<String, Stri
 #[tauri::command]
 fn login(app: tauri::AppHandle, url: String, username: String, password: String) -> Result<String, String> {
     let sd = state_dir(&app)?;
-    let out = run_cli(&sd, &["login".into(), url, username, password], false)?;
+    // S1: 密码不走 argv（Windows 进程列表可见），改走环境变量 NEBULA_PASSWORD
+    let env = vec![("NEBULA_PASSWORD".to_string(), password)];
+    let out = run_cli(&sd, &["login".into(), url, username], false, &env)?;
     Ok(out.trim().to_string())
 }
 
@@ -136,7 +194,7 @@ fn create_pair(
         args.push("--url".into());
         args.push(u);
     }
-    let out = run_cli(&sd, &args, true)?;
+    let out = run_cli(&sd, &args, true, &[])?;
     serde_json::from_str(out.trim()).map_err(|e| e.to_string())
 }
 
@@ -153,8 +211,6 @@ fn add_pair(
     let mut args: Vec<String> = vec![
         "add".into(),
         name,
-        "--token".into(),
-        token,
         "--dir".into(),
         dir,
         "--mode".into(),
@@ -164,28 +220,30 @@ fn add_pair(
         args.push("--url".into());
         args.push(u);
     }
-    let out = run_cli(&sd, &args, false)?;
+    // S2: token 不走 argv，改走环境变量 NEBULA_TOKEN
+    let env = vec![("NEBULA_TOKEN".to_string(), token)];
+    let out = run_cli(&sd, &args, false, &env)?;
     Ok(out.trim().to_string())
 }
 
 #[tauri::command]
 fn list_pairs(app: tauri::AppHandle) -> Result<Value, String> {
     let sd = state_dir(&app)?;
-    let out = run_cli(&sd, &["list".into()], true)?;
+    let out = run_cli(&sd, &["list".into()], true, &[])?;
     serde_json::from_str(out.trim()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn remove_pair(app: tauri::AppHandle, id: u32) -> Result<String, String> {
     let sd = state_dir(&app)?;
-    let out = run_cli(&sd, &["remove".into(), id.to_string()], false)?;
+    let out = run_cli(&sd, &["remove".into(), id.to_string()], false, &[])?;
     Ok(out.trim().to_string())
 }
 
 #[tauri::command]
 fn status(app: tauri::AppHandle) -> Result<Value, String> {
     let sd = state_dir(&app)?;
-    let out = run_cli(&sd, &["status".into()], true)?;
+    let out = run_cli(&sd, &["status".into()], true, &[])?;
     serde_json::from_str(out.trim()).map_err(|e| e.to_string())
 }
 
@@ -197,7 +255,7 @@ fn run_sync(app: tauri::AppHandle, pair_id: Option<String>) -> Result<String, St
         args.push("--pair".into());
         args.push(id);
     }
-    let out = run_cli(&sd, &args, false)?;
+    let out = run_cli(&sd, &args, false, &[])?;
     Ok(out.trim().to_string())
 }
 
@@ -284,6 +342,18 @@ fn stop_watch(app: tauri::AppHandle) -> Result<(), String> {
     do_stop_watch(&app)
 }
 
+/// B1: 应用退出前清理 node 监听子进程，避免其成为孤儿进程在后台继续同步。
+/// Mutex 可能已中毒（此前持有者 panic），用 into_inner 安全取值。
+fn kill_watch_on_exit(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let mut guard = state.watch.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(child) = guard.as_mut() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    *guard = None;
+}
+
 fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let Some(tray) = app.tray_by_id("main-tray") else {
         return Ok(());
@@ -338,6 +408,12 @@ fn main() {
             setup_tray(app.handle())?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running NebulaDrive desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building NebulaDrive desktop")
+        // B1: 应用退出（RunEvent::Exit）时 kill 掉 node 监听子进程，避免孤儿进程在后台继续同步
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                kill_watch_on_exit(app_handle);
+            }
+        });
 }

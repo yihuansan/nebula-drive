@@ -26,7 +26,12 @@
       "title": "NebulaDrive"
     },
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": ["'self'"],
+        "connect-src": ["'self'", "http://127.0.0.1:8080"],
+        "img-src": ["'self'", "data:"],
+        "style-src": ["'self'", "'unsafe-inline'"]
+      }
     }
   },
   "bundle": {
