@@ -27,12 +27,14 @@ import { recordSession, parseDeviceName } from '../services/session.service.js';
 export async function authRoutes(app: FastifyInstance) {
   // 获取验证码
   // P1-4 修复：响应只回 { id, image }，code 仅存内存 store，不返回明文
-  app.get('/auth/captcha', async (_req, reply) => {
+  // P1-5：验证码端点单独限流 10 次/分钟/IP（覆盖全局 300），防止验证码爆破
+  app.get('/auth/captcha', { config: { rateLimit: { max: 10, timeWindow: 60000 } } }, async (_req, reply) => {
     const { id, image } = createCaptcha();
     return ok(reply, { id, image });
   });
 
-  app.post('/auth/login', async (req, reply) => {
+  // P1-5：登录端点单独限流 5 次/分钟/IP（覆盖全局 300），防止密码爆破
+  app.post('/auth/login', { config: { rateLimit: { max: 5, timeWindow: 60000 } } }, async (req, reply) => {
     const { username, password, captchaId, captchaCode, twoFactorCode } = (req.body || {}) as {
       username?: string;
       password?: string;

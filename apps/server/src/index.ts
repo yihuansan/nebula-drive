@@ -1,7 +1,8 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import fstatic from '@fastify/static';
+import rateLimit from '@fastify/rate-limit';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,7 +77,43 @@ async function buildApp(): Promise<FastifyInstance> {
       redact: ['req.headers.authorization', 'req.query.token'],
     },
     bodyLimit: 1024 * 1024 * 1024, // 1GB，分片上传
-    maxParamLength: 512,
+    // Fastify 5：maxParamLength 顶层属性已弃用（fastify@6 移除），迁移到 routerOptions
+    routerOptions: {
+      maxParamLength: 512,
+    },
+  });
+
+  // P1-5 修复：全局限流 300 次/分钟/IP（默认按 IP 计数），防止接口滥用与暴力破解
+  // 特定端点（验证码/登录）在各自路由上以更严格的 config.rateLimit 覆盖（见 routes/auth.routes.ts）
+  await app.register(rateLimit, {
+    max: 300,
+    timeWindow: 60 * 1000,
+  });
+
+  // P1-5：限流触发时统一返回 { error: '请求过于频繁，请稍后再试' }（429）
+  // @fastify/rate-limit 通过抛出 statusCode=429 的错误触发限流，由本 handler 统一其响应体
+  // 其余错误沿用 { error } 约定（与 fail() 一致）
+  // Fastify 5：setErrorHandler 的 error 参数默认类型为 unknown（v4 为 FastifyError），
+  // 显式指定 FastifyError 泛型以保留 statusCode/message 的类型安全访问。
+  app.setErrorHandler<FastifyError>((err, _req, reply) => {
+    if (err.statusCode === 429) {
+      return reply.status(429).send({ error: '请求过于频繁，请稍后再试' });
+    }
+    const statusCode =
+      typeof err.statusCode === 'number' && err.statusCode >= 400 && err.statusCode < 600
+        ? err.statusCode
+        : 500;
+    return reply.status(statusCode).send({ error: err.message || '服务器内部错误' });
+  });
+
+  // P2-6 安全响应头：所有响应统一附加（轻量 onSend hook，无需额外依赖）
+  app.addHook('onSend', async (_req, reply) => {
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-XSS-Protection', '1; mode=block');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('X-Download-Options', 'noopen');
+    reply.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   });
 
   // P1-1 修复：CORS 收敛为显式 origin 列表（默认同源，无 CORS 头），防止任意来源带凭证跨域访问
@@ -90,8 +127,8 @@ async function buildApp(): Promise<FastifyInstance> {
   // 原始二进制体：同步推送 /sync/push 与非 multipart 的 /upload/chunk
   // 注意：Fastify 的 content-type parser 必须调用 done(null, body) 才会完成请求，
   // 仅 return 非 Promise 值会导致请求永久挂起。
-  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req: unknown, body: Buffer, done: (e: unknown, b: Buffer) => void) => done(null, body));
-  app.addContentTypeParser('application/x-raw', { parseAs: 'buffer' }, (_req: unknown, body: Buffer, done: (e: unknown, b: Buffer) => void) => done(null, body));
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req: unknown, body: Buffer, done: (err: Error | null, b?: unknown) => void) => done(null, body));
+  app.addContentTypeParser('application/x-raw', { parseAs: 'buffer' }, (_req: unknown, body: Buffer, done: (err: Error | null, b?: unknown) => void) => done(null, body));
 
   app.get('/health', async () => ({ status: 'ok', app: config.appName, time: new Date().toISOString() }));
   app.get('/api/v1/health', async () => ({ status: 'ok' }));
