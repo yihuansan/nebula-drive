@@ -1,6 +1,6 @@
 {
   "productName": "NebulaDrive",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.nebula.desktop",
   "build": {
     "beforeDevCommand": "pnpm run dev",
@@ -37,6 +37,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/app.ico"]
+    "icon": ["icons/app.ico"],
+    "resources": {
+      "../../sync/dist/cli.js": "cli.js"
+    }
   }
 }

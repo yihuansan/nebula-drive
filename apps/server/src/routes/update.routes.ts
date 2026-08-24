@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { ok, fail, requirePermission } from '../auth/middleware';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execSync, spawn } from 'node:child_process';
 
 // 获取 GitHub Token（优先环境变量，其次 data/.github-token 文件）
@@ -166,6 +167,32 @@ export async function updateRoutes(app: FastifyInstance) {
       const buffer = await zipRes.arrayBuffer();
       fs.writeFileSync(zipPath, Buffer.from(buffer));
       log(`下载完成: ${buffer.byteLength} bytes`);
+
+      // P1-8 修复：SHA256 完整性校验
+      // 从 GitHub release 下载 .sha256 文件，验证下载包的哈希
+      const sha256File = asset.name + '.sha256';
+      const sha256Url = asset.browser_download_url.replace(/[^/]*$/, sha256File);
+      let sha256Verified = false;
+      try {
+        const shaRes = await fetch(sha256Url, { headers: { 'User-Agent': 'NebulaDrive' } });
+        if (shaRes.ok) {
+          const shaContent = (await shaRes.text()).trim();
+          const expectedHash = shaContent.split(/\s+/)[0].toLowerCase();
+          const actualHash = crypto.createHash('sha256').update(Buffer.from(buffer)).digest('hex');
+          if (expectedHash === actualHash) {
+            sha256Verified = true;
+            log('SHA256 校验通过');
+          } else {
+            log(`ERROR: SHA256 校验失败 (expected: ${expectedHash}, actual: ${actualHash})`);
+            fs.rmSync(zipPath, { force: true });
+            return fail(reply, 500, 'SHA256 校验失败，下载包可能被篡改');
+          }
+        } else {
+          log(`WARN: 无法获取 SHA256 文件 (${shaRes.status})，跳过校验`);
+        }
+      } catch (e: any) {
+        log(`WARN: SHA256 校验异常: ${e.message}，跳过校验`);
+      }
 
       // 3. 解压
       const extractDir = path.join(tmpDir, 'extracted');

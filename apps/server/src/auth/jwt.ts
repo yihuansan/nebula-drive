@@ -8,6 +8,8 @@ export interface JwtPayload {
   sub: number;
   username: string;
   role: 'admin' | 'user';
+  /** 2FA 临时 token 标记；仅 /auth/login/2fa 可接受 */
+  type?: '2fa-temp';
   iat: number;
   exp: number;
 }

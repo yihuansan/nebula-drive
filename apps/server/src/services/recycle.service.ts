@@ -4,6 +4,19 @@ import path from 'node:path';
 import { getDb } from '../db/index.js';
 import { getDriver } from '../storage/registry.js';
 import { dirs } from '../config.js';
+import { safeRelPath } from '../utils/path.js';
+import { fileIndex } from './fileIndex.service.js';
+import { usageCache } from './usageCache.service.js';
+
+/** P2-5/P2-6: 回收站操作会改变存储内容，使搜索索引与用量缓存失效 */
+function invalidateCaches(storageId: number): void {
+  try {
+    fileIndex.markDirty(storageId);
+    usageCache.invalidate(storageId);
+  } catch {
+    // 缓存失效失败不影响主流程
+  }
+}
 
 export interface RecycleRow {
   id: number;
@@ -34,7 +47,10 @@ export const recycleService = {
 
     if (rec.type === 'local') {
       const cfg = typeof rec.config === 'string' ? JSON.parse(rec.config || '{}') : (rec.config || {});
-      const real = path.join(cfg.root || dirs.storageRoot, filePath);
+      const root = cfg.root || dirs.storageRoot;
+      // P0-1 修复：校验 filePath 在存储根目录内，防止任意文件移入回收站
+      const real = safeRelPath(filePath, root);
+      if (!real) throw new Error('非法路径：文件不在存储范围内');
       const target = path.join(dirs.recycle, crypto.randomUUID());
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.renameSync(real, target);
@@ -47,6 +63,7 @@ export const recycleService = {
       `INSERT INTO recycle (storage_id, path, name, size, is_dir, local_copy, deleted_by)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ).run(storageId, filePath, name, stat?.size || 0, stat?.isDir ? 1 : 0, localCopy, userId ?? null);
+    invalidateCaches(storageId);
   },
 
   list() {
@@ -60,9 +77,13 @@ export const recycleService = {
     if (row.local_copy) {
       const rec = db.prepare('SELECT * FROM storages WHERE id = ?').get(row.storage_id) as any;
       const cfg = rec ? (typeof rec.config === 'string' ? JSON.parse(rec.config || '{}') : (rec.config || {})) : {};
-      const real = path.join(cfg.root || dirs.storageRoot, row.path);
+      const root = cfg.root || dirs.storageRoot;
+      // P0-2 修复：校验 DB 中记录的 path 在存储根目录内，防止任意文件写回
+      const real = safeRelPath(row.path, root);
+      if (!real) throw new Error('非法路径：恢复目标不在存储范围内');
       fs.mkdirSync(path.dirname(real), { recursive: true });
       fs.renameSync(row.local_copy, real);
+      invalidateCaches(row.storage_id);
     } else {
       throw new Error('远程存储项已物理删除，无法恢复（请重新上传）');
     }
@@ -76,16 +97,21 @@ export const recycleService = {
       fs.rmSync(row.local_copy, { recursive: true, force: true });
     }
     getDb().prepare('DELETE FROM recycle WHERE id = ?').run(id);
+    invalidateCaches(row.storage_id);
   },
 
   clear(): void {
-    const rows = getDb().prepare('SELECT * FROM recycle').all() as unknown as RecycleRow[];
+    const db = getDb();
+    const rows = db.prepare('SELECT * FROM recycle').all() as unknown as RecycleRow[];
     for (const r of rows) {
       if (r.local_copy && fs.existsSync(r.local_copy)) {
         fs.rmSync(r.local_copy, { recursive: true, force: true });
       }
     }
-    getDb().prepare('DELETE FROM recycle').run();
+    db.prepare('DELETE FROM recycle').run();
+    // 收集受影响的存储并使其缓存失效
+    const storageIds = Array.from(new Set(rows.map((r) => r.storage_id)));
+    for (const sid of storageIds) invalidateCaches(sid);
   },
 
   /**
@@ -103,6 +129,9 @@ export const recycleService = {
       }
     }
     const info = db.prepare('DELETE FROM recycle WHERE deleted_at < ?').run(cutoff);
+    // 清理了物理文件 → 使受影响存储的缓存失效
+    const storageIds = Array.from(new Set(rows.map((r) => r.storage_id)));
+    for (const sid of storageIds) invalidateCaches(sid);
     return Number(info.changes) || 0;
   },
 };

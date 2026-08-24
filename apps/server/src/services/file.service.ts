@@ -4,6 +4,18 @@ import { getDriver, type StorageRecord } from '../storage/registry.js';
 import type { Entry } from '../storage/types.js';
 import { recycleService } from './recycle.service.js';
 import { opLog } from './log.service.js';
+import { fileIndex } from './fileIndex.service.js';
+import { usageCache } from './usageCache.service.js';
+
+/** P2-5/P2-6: 文件变更后使搜索索引与用量缓存失效 */
+function invalidateCaches(storageId: number): void {
+  try {
+    fileIndex.markDirty(storageId);
+    usageCache.invalidate(storageId);
+  } catch {
+    // 缓存失效失败不影响主流程
+  }
+}
 
 export function getStorageRecord(id: number): StorageRecord | null {
   const row = getDb().prepare('SELECT * FROM storages WHERE id = ?').get(id) as unknown as StorageRecord | undefined;
@@ -62,6 +74,7 @@ export const fileService = {
     const rec = getStorageRecord(storageId);
     if (!rec) throw new Error('存储不存在');
     await getDriver(rec).mkdir(path);
+    invalidateCaches(storageId);
     opLog(user?.id, user?.username, 'mkdir', path);
   },
 
@@ -69,6 +82,7 @@ export const fileService = {
     const rec = getStorageRecord(storageId);
     if (!rec) throw new Error('存储不存在');
     await getDriver(rec).rename(path, newPath);
+    invalidateCaches(storageId);
     opLog(user?.id, user?.username, 'rename', `${path} -> ${newPath}`);
   },
 
@@ -76,6 +90,7 @@ export const fileService = {
     const rec = getStorageRecord(storageId);
     if (!rec) throw new Error('存储不存在');
     await getDriver(rec).move(path, destPath);
+    invalidateCaches(storageId);
     opLog(user?.id, user?.username, 'move', `${path} -> ${destPath}`);
   },
 
@@ -83,6 +98,7 @@ export const fileService = {
     const rec = getStorageRecord(storageId);
     if (!rec) throw new Error('存储不存在');
     await getDriver(rec).copy(path, destPath);
+    invalidateCaches(storageId);
     opLog(user?.id, user?.username, 'copy', `${path} -> ${destPath}`);
   },
 
@@ -91,6 +107,7 @@ export const fileService = {
     const rec = getStorageRecord(storageId);
     if (!rec) throw new Error('存储不存在');
     await recycleService.moveToRecycle(storageId, path, user?.id);
+    invalidateCaches(storageId);
     opLog(user?.id, user?.username, 'delete', path);
   },
 
@@ -113,8 +130,14 @@ export const fileService = {
     const out: Array<{ storageId: number; storageName: string; entry: Entry }> = [];
     for (const rec of list) {
       try {
-        const driver = getDriver(rec);
-        let entries = await driver.search(q, '/');
+        // P2-5: local 存储优先查 files_index（脏/空时惰性重建），
+        // 远程存储或索引不可用时回退到 driver 递归扫描
+        let entries: Entry[];
+        if (await fileIndex.ensureReady(rec.id)) {
+          entries = fileIndex.search(rec.id, q);
+        } else {
+          entries = await getDriver(rec).search(q, '/');
+        }
         // 应用过滤条件
         if (filters) {
           entries = entries.filter((e) => {

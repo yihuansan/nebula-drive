@@ -26,9 +26,10 @@ import { recordSession, parseDeviceName } from '../services/session.service.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 获取验证码
+  // P1-4 修复：响应只回 { id, image }，code 仅存内存 store，不返回明文
   app.get('/auth/captcha', async (_req, reply) => {
-    const { id, code } = createCaptcha();
-    return ok(reply, { id, code });
+    const { id, image } = createCaptcha();
+    return ok(reply, { id, image });
   });
 
   app.post('/auth/login', async (req, reply) => {
@@ -70,7 +71,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (twoFa) {
       if (!twoFactorCode) {
         // 需要 2FA 验证，返回临时 token 供前端进行第二步验证
-        const tempToken = signJwt({ sub: u.id, username: u.username, role: u.role }, jwtSecret, 300); // 5 分钟临时 token
+        // P0-6 修复：临时 token 携带 type='2fa-temp' 标记，中间件拒绝其访问其他端点
+        const tempToken = signJwt({ sub: u.id, username: u.username, role: u.role, type: '2fa-temp' }, jwtSecret, 300); // 5 分钟临时 token
         return ok(reply, {
           requiresTwoFactor: true,
           tempToken,

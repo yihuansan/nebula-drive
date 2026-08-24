@@ -266,6 +266,27 @@ CREATE INDEX IF NOT EXISTS idx_quick_access_storage ON quick_access (storage_id)
     CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history (user_id);
     CREATE INDEX IF NOT EXISTS idx_file_favorites_user ON file_favorites (user_id);
 
+    -- P2-5: 文件搜索索引（缓存文件元数据，搜索时查表而非递归扫盘）
+    CREATE TABLE IF NOT EXISTS files_index (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      storage_id INTEGER NOT NULL,
+      path       TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      size       INTEGER DEFAULT 0,
+      mtime      TEXT DEFAULT '',
+      is_dir     INTEGER DEFAULT 0,
+      UNIQUE(storage_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_files_index_name ON files_index (storage_id, name);
+
+    -- P2-6: 存储用量缓存（避免每次请求递归遍历文件系统）
+    CREATE TABLE IF NOT EXISTS storage_usage_cache (
+      storage_id  INTEGER PRIMARY KEY,
+      total_bytes INTEGER DEFAULT 0,
+      file_count  INTEGER DEFAULT 0,
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+
     -- 2FA 双因素认证
     CREATE TABLE IF NOT EXISTS user_2fa (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -302,4 +323,11 @@ CREATE INDEX IF NOT EXISTS idx_quick_access_storage ON quick_access (storage_id)
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens (user_id);
   `);
+
+  // P1-9 迁移：为 hidden_space_settings 添加 salt 列
+  try {
+    db.exec(`ALTER TABLE hidden_space_settings ADD COLUMN salt TEXT DEFAULT ''`);
+  } catch {
+    // 列已存在，忽略
+  }
 }

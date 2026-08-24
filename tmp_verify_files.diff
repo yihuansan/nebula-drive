@@ -1,0 +1,507 @@
+﻿diff --git a/apps/web/src/views/Files.vue b/apps/web/src/views/Files.vue
+index 68e6d4a..bdff9b6 100644
+--- a/apps/web/src/views/Files.vue
++++ b/apps/web/src/views/Files.vue
+@@ -1,9 +1,10 @@
+ <script setup lang="ts">
+-import { ref, computed, onMounted, onUnmounted } from 'vue';
++import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+ import { useRoute } from 'vue-router';
+ import { ElMessage, ElMessageBox } from 'element-plus';
+ import { api, fmtSize, fmtTime } from '../api';
+ import { useTheme, THEMES, type ThemeKey } from '../useTheme';
++import { useAuthStore } from '../stores/auth';
+ 
+ const storages = ref<any[]>([]);
+ const storageId = ref(0);
+@@ -79,12 +80,181 @@ const layoutType = computed(() => {
+   return t?.layout || 'sidebar';
+ });
+ 
+-// 统计卡片配置
+-const statCards = computed(() => [
+-  { id: 'folders', icon: 'Folder', iconClass: 'si-blue', label: '文件夹', value: entries.value.filter(e => e.isDir).length },
+-  { id: 'files', icon: 'Document', iconClass: 'si-green', label: '文件', value: entries.value.filter(e => !e.isDir).length },
+-  { id: 'size', icon: 'DataLine', iconClass: 'si-purple', label: '总大小', value: fmtSize(entries.value.reduce((sum, e) => sum + (e.size || 0), 0)) },
+-]);
++// 统计卡片配置（仪表盘主题：4 张卡 + 趋势 chip）
++const auth = useAuthStore();
++const statCards = computed(() => {
++  const now = Date.now();
++  const weekMs = 7 * 24 * 3600 * 1000;
++  const recent = entries.value.filter(e => (e.mtime || 0) >= now - weekMs);
++  const prev = entries.value.filter(e => {
++    const m = e.mtime || 0;
++    return m < now - weekMs && m >= now - 2 * weekMs;
++  });
++  const totalSize = entries.value.reduce((sum, e) => sum + (e.size || 0), 0);
++  const recentFiles = recent.filter(e => !e.isDir).length;
++  const fileCount = entries.value.filter(e => !e.isDir).length;
++  const quota = Number((auth.user as any)?.quota) || 0;
++  const quotaPct = quota > 0 ? Math.min(100, Math.round((totalSize / quota) * 100)) : null;
++  const diff = recent.length - prev.length;
++  return [
++    {
++      id: 'size',
++      icon: 'DataLine',
++      iconClass: 'si-blue',
++      label: '总容量',
++      value: fmtSize(totalSize),
++      trend: recent.length
++        ? { dir: 'up', text: `本周 +${recent.length}` }
++        : { dir: 'down', text: '近期无变化' },
++    },
++    {
++      id: 'files',
++      icon: 'Document',
++      iconClass: 'si-green',
++      label: '文件数',
++      value: fileCount,
++      trend: recentFiles
++        ? { dir: 'up', text: `本周 +${recentFiles}` }
++        : { dir: 'down', text: '无新增' },
++    },
++    {
++      id: 'recent',
++      icon: 'Upload',
++      iconClass: 'si-purple',
++      label: '近 7 天上传',
++      value: recent.length,
++      trend: diff > 0
++        ? { dir: 'up', text: `较上期 +${diff}` }
++        : diff < 0
++          ? { dir: 'down', text: `较上期 ${diff}` }
++          : { dir: 'up', text: '与上期持平' },
++    },
++    {
++      id: 'quota',
++      icon: 'Odometer',
++      iconClass: 'si-orange',
++      label: '配额使用率',
++      value: quotaPct === null ? '不限' : `${quotaPct}%`,
++      trend: quotaPct === null
++        ? { dir: 'up', text: '无上限' }
++        : quotaPct >= 80
++          ? { dir: 'down', text: '接近上限' }
++          : { dir: 'up', text: '空间充足' },
++    },
++  ];
++});
++
++/* ---------- ⌘K 命令面板（仅 command 主题激活） ---------- */
++const cmdkOpen = ref(false);
++const cmdkQuery = ref('');
++const cmdkActiveIndex = ref(0);
++const cmdkInputRef = ref<HTMLInputElement | null>(null);
++
++/** 模糊打分：子串 > 子序列；不匹配返回 -1 */
++function cmdkScore(name: string, q: string): number {
++  const n = name.toLowerCase();
++  const s = q.trim().toLowerCase();
++  if (!s) return 100;
++  const idx = n.indexOf(s);
++  if (idx >= 0) return 10000 - idx; // 子串命中：位置越靠前分越高
++  let i = 0;
++  let score = 0;
++  let gap = 0;
++  for (let j = 0; j < n.length && i < s.length; j++) {
++    if (n[j] === s[i]) {
++      i++;
++      score += Math.max(0, 50 - gap);
++      gap = 0;
++    } else {
++      gap++;
++    }
++  }
++  if (i < s.length) return -1; // 非子序列
++  return score;
++}
++
++const cmdkResults = computed(() => {
++  const q = cmdkQuery.value.trim().toLowerCase();
++  return entries.value
++    .map((entry, index) => ({ entry, index, score: cmdkScore(entry.name, q) }))
++    .filter(r => r.score >= 0)
++    .sort((a, b) => b.score - a.score || a.index - b.index)
++    .slice(0, 20)
++    .map(r => r.entry);
++});
++
++watch(cmdkQuery, () => {
++  cmdkActiveIndex.value = 0;
++});
++
++function openCmdk() {
++  cmdkOpen.value = true;
++  cmdkQuery.value = '';
++  cmdkActiveIndex.value = 0;
++  nextTick(() => cmdkInputRef.value?.focus());
++}
++function closeCmdk() {
++  cmdkOpen.value = false;
++  cmdkQuery.value = '';
++  cmdkActiveIndex.value = 0;
++}
++function executeCmdk() {
++  const entry = cmdkResults.value[cmdkActiveIndex.value];
++  if (!entry) return;
++  closeCmdk();
++  if (entry.isDir) {
++    path.value = entry.path;
++    load();
++  } else {
++    openPreview(entry);
++  }
++}
++function selectCmdk(i: number) {
++  cmdkActiveIndex.value = i;
++  executeCmdk();
++}
++/** 面板打开时的键盘导航：↑/↓ 移动、Enter 执行、Esc 关闭 */
++function onCmdkKeydown(e: KeyboardEvent) {
++  if (e.key === 'Escape') {
++    closeCmdk();
++    e.preventDefault();
++  } else if (e.key === 'ArrowDown') {
++    const len = cmdkResults.value.length;
++    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value + 1) % len : 0;
++    e.preventDefault();
++  } else if (e.key === 'ArrowUp') {
++    const len = cmdkResults.value.length;
++    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value - 1 + len) % len : 0;
++    e.preventDefault();
++  } else if (e.key === 'Enter') {
++    executeCmdk();
++    e.preventDefault();
++  }
++}
++/** 全局快捷键：Meta+K / Control+K（仅 command 主题响应） */
++function onGlobalKeydown(e: KeyboardEvent) {
++  if (layoutType.value !== 'command') return;
++  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
++    e.preventDefault();
++    if (cmdkOpen.value) closeCmdk();
++    else openCmdk();
++  }
++}
++onMounted(() => {
++  window.addEventListener('keydown', onGlobalKeydown);
++});
++onUnmounted(() => {
++  window.removeEventListener('keydown', onGlobalKeydown);
++});
++
++/** 便当盒布局：featured 2×2（首卡）+ medium 2×1（第 2/3 卡）+ 彩色 tile（每屏 2-3 张） */
++function bentoCardClass(index: number): string {
++  if (index === 0) return 'bento-featured tile-indigo';
++  if (index === 1 || index === 2) return 'bento-medium';
++  if (index === 4) return 'tile-amber';
++  if (index === 8) return 'tile-emerald';
++  return '';
++}
+ 
+ 
+ 
+@@ -1241,12 +1411,37 @@ onMounted(async () => {
+     'files-command': layoutType === 'command',
+     'files-topnav': layoutType === 'topnav'
+   }">
+-    <!-- 仪表盘统计卡片 -->
++    <!-- ⌘K 命令面板（仅 command 主题；Meta+K / Ctrl+K 打开，↑↓/Enter/Esc 键盘导航） -->
++    <div v-if="layoutType === 'command' && cmdkOpen" class="cmdk-panel">
++      <input
++        ref="cmdkInputRef"
++        v-model="cmdkQuery"
++        class="cmdk-input"
++        placeholder="搜索文件…"
++        @keydown="onCmdkKeydown"
++      />
++      <div class="cmdk-list">
++        <div
++          v-for="(item, i) in cmdkResults"
++          :key="item.path"
++          class="cmdk-item"
++          :class="{ active: i === cmdkActiveIndex }"
++          @click="selectCmdk(i)"
++          @mouseenter="cmdkActiveIndex = i"
++        >
++          <span class="cmdk-icon">{{ item.isDir ? '📁' : '📄' }}</span>
++          <span class="cmdk-name">{{ item.name }}</span>
++        </div>
++        <div v-if="cmdkResults.length === 0" class="cmdk-empty">无匹配结果</div>
++      </div>
++    </div>
++    <!-- 仪表盘统计卡片（4 张 + 趋势 chip + --i 入场 stagger） -->
+     <div v-if="layoutType === 'dashboard'" class="stats-bar">
+       <div
+-        v-for="card in statCards"
++        v-for="(card, i) in statCards"
+         :key="card.id"
+         class="stat-card glass"
++        :style="{ '--i': i }"
+       >
+         <div class="stat-icon" :class="card.iconClass">
+           <el-icon><component :is="card.icon" /></el-icon>
+@@ -1255,6 +1450,9 @@ onMounted(async () => {
+           <div class="stat-value">{{ card.value }}</div>
+           <div class="stat-label">{{ card.label }}</div>
+         </div>
++        <div class="stat-trend" :class="card.trend.dir">
++          {{ card.trend.text }}
++        </div>
+       </div>
+     </div>
+     <div class="files-glass glass">
+@@ -1343,10 +1541,13 @@ onMounted(async () => {
+         <!-- 真实文件：带淡入动画 -->
+         <template v-else>
+         <div
+-          v-for="row in entries"
++          v-for="(row, i) in entries"
+           :key="row.path"
+           class="file-card glass-card file-fade-in"
+-          :class="{ selected: isSelected(row) }"
++          :class="[
++            { selected: isSelected(row) },
++            layoutType === 'bento' ? bentoCardClass(i) : ''
++          ]"
+           @click="onCardClick(row)"
+           @contextmenu="showContextMenu($event, row)"
+         >
+@@ -2765,26 +2966,143 @@ onMounted(async () => {
+   opacity: 1;
+ }
+ 
+-/* ---------- 便当盒布局：混合大小卡片 ---------- */
++/* ---------- 仪表盘布局：统计卡网格（4 列 + 趋势 chip + 入场 stagger） ---------- */
++.files-dashboard .stats-bar {
++  display: grid;
++  grid-template-columns: repeat(4, 1fr);
++  gap: 16px;
++}
++@media (max-width: 1199px) {
++  .files-dashboard .stats-bar {
++    grid-template-columns: repeat(2, 1fr);
++  }
++}
++@media (max-width: 767px) {
++  .files-dashboard .stats-bar {
++    grid-template-columns: 1fr;
++  }
++}
++.files-dashboard .stat-card {
++  min-height: 108px;
++  border-radius: 12px;
++  padding: 16px 20px;
++  background: linear-gradient(135deg, rgba(30, 41, 59, 0.6), rgba(51, 65, 85, 0.6));
++  animation: dash-in 240ms ease-out both;
++  animation-delay: calc(var(--i) * 40ms);
++}
++.files-dashboard .stat-value {
++  font-size: 28px;
++  font-weight: 700;
++  transition: transform 150ms;
++}
++/* 点睛：统计卡 hover 时数值轻微放大 */
++.files-dashboard .stat-card:hover .stat-value {
++  transform: scale(1.02);
++}
++.files-dashboard .stat-label {
++  font-size: 13px;
++}
++/* 趋势 chip：涨绿 / 跌红 */
++.stat-trend {
++  margin-left: auto;
++  display: inline-block;
++  padding: 2px 8px;
++  border-radius: 999px;
++  font-size: 12px;
++  font-weight: 500;
++  white-space: nowrap;
++}
++.stat-trend.up {
++  color: #34d399;
++  background: rgba(52, 211, 153, 0.12);
++}
++.stat-trend.down {
++  color: #f87171;
++  background: rgba(248, 113, 113, 0.12);
++}
++/* 第 4 张卡（配额）图标底色 */
++.si-orange {
++  background: linear-gradient(135deg, #f59e0b, #fbbf24);
++}
++@keyframes dash-in {
++  from {
++    opacity: 0;
++    transform: translateY(12px);
++  }
++}
++
++/* ---------- 便当盒布局：4 列 bento 网格（1 featured 2×2 + medium + 彩色 tile） ---------- */
+ .files-bento .file-grid {
+   display: grid;
+-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
++  grid-template-columns: repeat(4, 1fr);
+   gap: 16px;
+ }
++/* 普通卡：实底白 + 1px 边框，非玻璃 */
+ .files-bento .file-card {
+-  border-radius: 20px;
++  background: #ffffff;
++  border: 1px solid #e2e8f0;
++  border-radius: 16px;
+   padding: 20px;
+ }
+-/* 每第 5 个卡片跨 2 列 */
+-.files-bento .file-card:nth-child(5n+1) {
++/* featured：2×2 大卡（首卡） */
++.files-bento .bento-featured {
+   grid-column: span 2;
+-}
+-/* 每第 7 个卡片跨 2 行 */
+-.files-bento .file-card:nth-child(7n+3) {
+   grid-row: span 2;
++  min-height: 340px;
++  background: #4f46e5;
++  color: #ffffff;
++  transition: transform 150ms ease-out, box-shadow 150ms ease-out;
++}
++/* 点睛：featured hover 轻微上浮 + 强调投影 */
++.files-bento .bento-featured:hover {
++  transform: translateY(-4px);
++  box-shadow: 0 16px 40px rgba(79, 70, 229, 0.3);
++}
++/* medium：2×1 中卡（第 2/3 卡） */
++.files-bento .bento-medium {
++  grid-column: span 2;
++  min-height: 168px;
++}
++/* 彩色 tile（每屏 2-3 张） */
++.files-bento .tile-indigo {
++  background: #4f46e5;
++  color: #fff;
++}
++.files-bento .tile-amber {
++  background: #f59e0b;
++  color: #451a03;
++}
++.files-bento .tile-emerald {
++  background: #10b981;
++  color: #052e16;
++}
++/* 点睛：tile 卡 hover 颜色轻微加深 */
++.files-bento .tile-indigo,
++.files-bento .tile-amber,
++.files-bento .tile-emerald {
++  transition: filter 150ms ease-out;
++}
++.files-bento .tile-indigo:hover,
++.files-bento .tile-amber:hover,
++.files-bento .tile-emerald:hover {
++  filter: brightness(1.05);
++}
++/* tile 卡内文字跟随 tile 配色（覆盖通用 var(--text)） */
++.files-bento .bento-featured .fc-name,
++.files-bento .tile-indigo .fc-name,
++.files-bento .tile-amber .fc-name,
++.files-bento .tile-emerald .fc-name {
++  color: inherit;
++}
++.files-bento .bento-featured .fc-meta,
++.files-bento .tile-indigo .fc-meta,
++.files-bento .tile-amber .fc-meta,
++.files-bento .tile-emerald .fc-meta {
++  color: inherit;
++  opacity: 0.8;
+ }
+ 
+-/* ---------- 命令式布局：极简列表 ---------- */
++/* ---------- 命令式布局：极简列表 + 真 ⌘K 命令面板 ---------- */
+ .files-command .toolbar {
+   display: none;
+ }
+@@ -2817,7 +3135,7 @@ onMounted(async () => {
+ .files-command .fc-name {
+   flex: 1;
+   font-size: 14px;
+-  font-family: inherit;
++  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
+ }
+ .files-command .fc-meta {
+   font-size: 12px;
+@@ -2826,14 +3144,67 @@ onMounted(async () => {
+ .files-command .fc-actions {
+   display: none;
+ }
+-.files-command::before {
+-  content: '⌘ 搜索文件...';
+-  display: block;
+-  padding: 12px 16px;
++
++/* ⌘K 命令面板（等宽仅 .fc-name / .cmdk-*，body 保持 sans） */
++.cmdk-panel {
++  position: fixed;
++  top: 20vh;
++  left: 50%;
++  transform: translateX(-50%);
++  width: 640px;
++  max-height: 480px;
++  background: #1e2128;
++  border: 1px solid #2e323c;
++  border-radius: 8px;
++  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
++  z-index: 2000;
++  display: flex;
++  flex-direction: column;
++}
++.cmdk-input {
++  height: 48px;
+   font-size: 16px;
+-  color: var(--text-secondary);
+-  border-bottom: 1px solid var(--glass-border);
+-  margin-bottom: 8px;
++  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
++  background: transparent;
++  border: none;
++  border-bottom: 1px solid #2e323c;
++  color: #e6e8ec;
++  padding: 0 16px;
++  outline: none;
++}
++.cmdk-list {
++  overflow-y: auto;
++  padding: 8px;
++}
++.cmdk-item {
++  height: 40px;
++  font-size: 14px;
++  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 12px;
++  border-radius: 4px;
++  cursor: pointer;
++  color: #e6e8ec;
++  border-left: 2px solid transparent; /* 占位：active 指示条不引起行内容位移 */
++  transition: background 80ms;
++}
++.cmdk-item.active {
++  background: #262a33;
++  border-left: 2px solid #ff6b35; /* 点睛：active 行左侧橙色指示条 */
++}
++.cmdk-name {
++  overflow: hidden;
++  white-space: nowrap;
++  text-overflow: ellipsis;
++}
++.cmdk-empty {
++  padding: 16px 12px;
++  font-size: 14px;
++  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
++  color: #9aa1ad;
++  text-align: center;
+ }
+ 
+ /* ---------- 顶部导航布局：更紧凑 ---------- */

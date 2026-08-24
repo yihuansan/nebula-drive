@@ -4,6 +4,7 @@ import { verifyJwt } from '../auth/jwt.js';
 import { jwtSecret, dirs } from '../config.js';
 import { fileService } from '../services/file.service.js';
 import { getStorageRecord, issueDownloadTicket, consumeDownloadTicket } from '../services/file.service.js';
+import { fileIndex } from '../services/fileIndex.service.js';
 import { getDriver } from '../storage/registry.js';
 import { getDb } from '../db/index.js';
 import fs from 'node:fs';
@@ -317,7 +318,7 @@ export async function fileRoutes(app: FastifyInstance) {
   });
 
   // ===== 压缩：将选中文件/文件夹打包为 zip 保存到服务器 =====
-  app.post('/files/compress', { preHandler: requirePermission('files:upload') }, async (req, reply) => {
+  app.post('/files/compress', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const b = req.body as { storageId?: number; paths?: string[]; destPath?: string };
     if (!b.paths?.length) return fail(reply, 400, '缺少文件列表');
     const storageId = b.storageId || 0;
@@ -328,7 +329,9 @@ export async function fileRoutes(app: FastifyInstance) {
     const firstPath = b.paths[0].replace(/^\//, '');
     const baseName = firstPath.split('/').pop() || 'archive';
     const zipName = baseName.endsWith('.zip') ? baseName : baseName + '.zip';
-    const destDir = b.destPath ? path.join(dirs.storageRoot, b.destPath.replace(/^\//, '')) : dirs.storageRoot;
+    // P0-3 修复：校验 destPath 在 storageRoot 内，防止任意位置写 zip
+    const destDir = b.destPath ? safeStoragePath(b.destPath) : dirs.storageRoot;
+    if (!destDir) return fail(reply, 400, '非法目标路径');
     const zipPath = path.join(destDir, zipName);
 
     const zip = new AdmZip();
@@ -359,6 +362,8 @@ export async function fileRoutes(app: FastifyInstance) {
     }
     // 写入 zip 文件
     fs.writeFileSync(zipPath, zip.toBuffer());
+    // P2-5/P2-6: 直接写盘到 storageRoot → 使对应 local 存储的索引与用量缓存失效
+    fileIndex.invalidateForRoot(dirs.storageRoot);
     return ok(reply, { path: `/${zipName}`, name: zipName });
   });
 
@@ -387,9 +392,25 @@ export async function fileRoutes(app: FastifyInstance) {
 
     try {
       const zip = new AdmZip(zipFullPath); // 读取 zip 文件
-      zip.extractAllTo(destDir, true);
       const entries = zip.getEntries();
-      return ok(reply, { extracted: entries.length });
+      // P0-4 修复：逐条校验 zip 条目路径，防止 zip-slip 任意文件写
+      let extracted = 0;
+      for (const entry of entries) {
+        const entryName = entry.entryName;
+        const target = safeStoragePath(entryName);
+        if (!target) continue; // 越界条目：跳过
+        // 确保目标目录存在
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        if (entry.isDirectory) {
+          fs.mkdirSync(target, { recursive: true });
+        } else {
+          fs.writeFileSync(target, entry.getData());
+          extracted++;
+        }
+      }
+      // P2-5/P2-6: 解压直接写盘到 storageRoot → 使对应 local 存储的索引与用量缓存失效
+      fileIndex.invalidateForRoot(dirs.storageRoot);
+      return ok(reply, { extracted });
     } catch (e: any) {
       return fail(reply, 500, '解压失败: ' + e.message);
     }

@@ -21,4 +21,9 @@ export const commentService = {
     const db = getDb();
     db.prepare('DELETE FROM file_comments WHERE id = ?').run(id);
   },
+
+  byId(id: number) {
+    const db = getDb();
+    return db.prepare('SELECT * FROM file_comments WHERE id = ?').get(id) as any;
+  },
 };

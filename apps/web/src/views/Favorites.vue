@@ -15,6 +15,8 @@ const storageMap = ref<Record<number, string>>({});
 
 /* ---------- 文件类型识别 ---------- */
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
+// FE-3: HTML/JS 文件强制下载，禁止内联预览（防 XSS / 脚本执行）
+const DANGEROUS_HTML_JS_EXTS = ['html', 'htm', 'js', 'jsx', 'mjs'];
 const CODE_EXTS = ['js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'html', 'css', 'json', 'sh', 'vue', 'go', 'rs', 'xml', 'yml', 'yaml', 'md', 'txt', 'sql', 'ini', 'conf', 'env'];
 function extOf(name: string) { return name.split('.').pop()?.toLowerCase() || ''; }
 function isImage(n: string) { return IMG_EXTS.includes(extOf(n)); }
@@ -157,6 +159,8 @@ const previewLoading = ref(false);
 async function openPreview(fav: any) {
   if (fav.isDir) return;
   const n = fileName(fav.path);
+  // FE-3: HTML/JS 文件强制下载，禁止内联预览
+  if (DANGEROUS_HTML_JS_EXTS.includes(extOf(n))) return download(fav);
   const kind = isVideo(n) ? 'video' : isAudio(n) ? 'audio' : isPdf(n) ? 'pdf' : isImage(n) ? 'image' : isCode(n) ? 'code' : null;
   if (!kind) return download(fav);
   previewName.value = n;
@@ -533,7 +537,7 @@ onMounted(async () => { await load(); });
         <img v-if="previewKind === 'image' && previewUrl" :src="previewUrl" class="pv-img" />
         <video v-if="previewKind === 'video' && previewUrl" :src="previewUrl" controls class="pv-video" />
         <audio v-if="previewKind === 'audio' && previewUrl" :src="previewUrl" controls style="width: 100%" />
-        <iframe v-if="previewKind === 'pdf' && previewUrl" :src="previewUrl" class="pv-pdf" />
+        <iframe v-if="previewKind === 'pdf' && previewUrl" :src="previewUrl" class="pv-pdf" sandbox="allow-scripts" />
         <pre v-if="previewKind === 'code'" class="pv-code">{{ previewCode }}</pre>
       </div>
     </el-dialog>

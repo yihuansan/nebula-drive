@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { requirePermission, ok, fail } from '../auth/middleware.js';
+import { requirePermission, authMiddleware, ok, fail } from '../auth/middleware.js';
 import { shareCollabService } from '../services/shareCollab.service.js';
 
 export async function shareCollabRoutes(app: FastifyInstance) {
@@ -157,7 +157,7 @@ export async function shareCollabRoutes(app: FastifyInstance) {
   // ===== 共享访问（接收者视角）=====
 
   /** 列出共享给我的 */
-  app.get('/share-collab/received', async (req, reply) => {
+  app.get('/share-collab/received', { preHandler: authMiddleware }, async (req, reply) => {
     const items = shareCollabService.listByRecipient(req.user!.sub);
     // 附加权限信息
     const { getDb } = await import('../db/index.js');
@@ -172,14 +172,14 @@ export async function shareCollabRoutes(app: FastifyInstance) {
   });
 
   /** 检查用户是否有权限访问某个共享 */
-  app.get('/share-collab/:id/check', async (req, reply) => {
+  app.get('/share-collab/:id/check', { preHandler: authMiddleware }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const perm = shareCollabService.hasPermission(id, req.user!.sub);
     return ok(reply, { permission: perm });
   });
 
   /** 访问共享内容（记录活动） */
-  app.get('/share-collab/:id/files', async (req, reply) => {
+  app.get('/share-collab/:id/files', { preHandler: authMiddleware }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const perm = shareCollabService.hasPermission(id, req.user!.sub);
     if (!perm) return fail(reply, 403, '无权访问');
@@ -219,7 +219,7 @@ export async function shareCollabRoutes(app: FastifyInstance) {
   });
 
   /** 下载共享文件（记录活动） */
-  app.get('/share-collab/:id/download', async (req, reply) => {
+  app.get('/share-collab/:id/download', { preHandler: authMiddleware }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     const perm = shareCollabService.hasPermission(id, req.user!.sub);
     if (!perm || perm === 'view') return fail(reply, 403, '无下载权限');

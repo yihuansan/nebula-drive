@@ -43,7 +43,8 @@ export const shareService = {
 
   create(params: { storageId: number; path: string; name?: string; password?: string; expiresAt?: string | null; maxDownloads?: number | null; userId?: number }) {
     const name = params.name || params.path.split('/').filter(Boolean).pop() || '分享';
-    const token = crypto.randomBytes(8).toString('hex');
+    // P2-2 修复：token 从 8 字节提升到 32 字节，增加熵
+    const token = crypto.randomBytes(32).toString('hex');
     const info = getDb()
       .prepare(
         `INSERT INTO shares (token, storage_id, path, name, password_hash, expires_at, max_downloads, created_by)
@@ -168,6 +169,8 @@ export const shareService = {
   async publicDownload(token: string, path?: string) {
     const s = this.byToken(token);
     if (!s || !s.enabled) throw new Error('分享不存在');
+    // P2-2 修复：校验分享过期时间
+    if (s.expires_at && new Date(s.expires_at + 'Z') < new Date()) throw new Error('分享已过期');
     if (s.max_downloads !== null && s.download_count >= s.max_downloads) throw new Error('下载次数已用完');
     getDb().prepare('UPDATE shares SET download_count = download_count + 1 WHERE id = ?').run(s.id);
     const driver = getDriver(getDb().prepare('SELECT * FROM storages WHERE id = ?').get(s.storage_id) as any);

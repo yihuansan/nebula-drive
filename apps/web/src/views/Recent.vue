@@ -371,7 +371,7 @@ async function clearAll() {
 
         <!-- PDF 预览 -->
         <template v-if="previewKind === 'pdf' && previewUrl">
-          <iframe :src="previewUrl" class="preview-pdf"></iframe>
+          <iframe :src="previewUrl" class="preview-pdf" sandbox="allow-scripts"></iframe>
         </template>
       </div>
     </el-dialog>

@@ -29,6 +29,8 @@ export const config = {
   appName: process.env.APP_NAME || 'NebulaDrive 星云网盘',
   appUrl: process.env.APP_URL || `http://localhost:${port}`,
   uploadChunkSize: intEnv('UPLOAD_CHUNK_SIZE', 5 * 1024 * 1024),
+  /** P1-1 修复：CORS 允许的 origin 列表（逗号分隔），默认同源 */
+  corsOrigins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()) : [],
 } as const;
 
 export const dirs = {

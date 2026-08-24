@@ -3,6 +3,18 @@ import { Readable } from 'node:stream';
 import { getDb } from '../db/index.js';
 import { getDriver } from '../storage/registry.js';
 import { opLog } from './log.service.js';
+import { fileIndex } from './fileIndex.service.js';
+import { usageCache } from './usageCache.service.js';
+
+/** P2-5/P2-6: 同步推送/删除会改变存储内容，使搜索索引与用量缓存失效 */
+function invalidateCaches(storageId: number): void {
+  try {
+    fileIndex.markDirty(storageId);
+    usageCache.invalidate(storageId);
+  } catch {
+    // 缓存失效失败不影响主流程
+  }
+}
 
 export interface SyncPairRow {
   id: number;
@@ -101,6 +113,7 @@ export const syncService = {
     const driver = getDriver(rec);
     const full = pair.remote_path === '/' ? relPath : pair.remote_path + relPath;
     await driver.upload(full, Readable.from([body]));
+    invalidateCaches(pair.storage_id);
     opLog(pair.user_id, undefined, 'sync_push', full);
   },
 
@@ -112,6 +125,7 @@ export const syncService = {
     const driver = getDriver(rec);
     const full = pair.remote_path === '/' ? relPath : pair.remote_path + relPath;
     await driver.delete(full, false);
+    invalidateCaches(pair.storage_id);
     opLog(pair.user_id, undefined, 'sync_delete', full);
   },
 };

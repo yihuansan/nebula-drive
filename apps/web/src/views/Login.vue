@@ -14,7 +14,7 @@ const loading = ref(false);
 /* ---------- 验证码相关 ---------- */
 const captchaRequired = ref(false);
 const captchaId = ref('');
-const captchaCode = ref('');
+const captchaImage = ref('');
 const captchaInput = ref('');
 const captchaError = ref('');
 
@@ -22,7 +22,7 @@ async function loadCaptcha() {
   try {
     const r = await api('/auth/captcha');
     captchaId.value = r.id;
-    captchaCode.value = r.code;
+    captchaImage.value = r.image || '';
   } catch {
     /* 忽略 */
   }
@@ -241,7 +241,8 @@ async function doTwoFaLogin() {
               @keyup.enter="doLogin"
             />
             <div class="captcha-img" @click="loadCaptcha" title="点击刷新">
-              <span class="captcha-text">{{ captchaCode }}</span>
+              <img v-if="captchaImage" :src="captchaImage" alt="验证码" class="captcha-img-el" />
+              <span v-else class="captcha-placeholder">加载中…</span>
             </div>
           </div>
         </el-form-item>
@@ -384,11 +385,16 @@ async function doTwoFaLogin() {
   cursor: pointer;
   user-select: none;
 }
-.captcha-text {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 4px;
+.captcha-img-el {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 8px;
+}
+.captcha-placeholder {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 .captcha-error {
   margin-top: 8px;

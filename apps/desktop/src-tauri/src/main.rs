@@ -16,11 +16,31 @@ struct AppState {
     watch: Mutex<Option<std::process::Child>>,
 }
 
+/// Windows 上 Rust 的 `canonicalize()` 会返回带 `\\?\` 前缀的扩展长度路径。
+/// Node 会把这种路径误判为 UNC 路径（服务器 `?`、共享 `D:`），解析主脚本时
+/// 崩溃为 `EISDIR: illegal operation on a directory, lstat 'D:'`。
+/// 传给 node 之前必须剥掉该前缀，使其成为普通路径。
+fn strip_extended_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy().into_owned();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+
 fn find_node() -> Result<PathBuf, String> {
     // S6: 解析顺序 NEBULA_NODE（显式指定，最可信）→ 官方默认安装路径 → 最后才扫 PATH。
     // 扫描 PATH 存在被恶意 PATH 条目劫持的风险，仅作兜底并打印告警。
     if let Ok(p) = std::env::var("NEBULA_NODE") {
-        return Ok(PathBuf::from(p));
+        let trimmed = p.trim();
+        // 修复：空值 / 不是文件的路径视为未设置，继续走默认查找。
+        // （旧版空值会原样传给子进程，node 把空参数按工作目录解析，
+        //  崩溃为 EISDIR: illegal operation on a directory, lstat '<盘符根目录>'。）
+        if !trimmed.is_empty() && PathBuf::from(trimmed).is_file() {
+            return Ok(PathBuf::from(trimmed));
+        }
+        eprintln!("[warn] NEBULA_NODE 被设置为无效值（[{p}]），已忽略并改用默认查找");
     }
     let known = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
     if known.is_file() {
@@ -42,34 +62,60 @@ fn find_node() -> Result<PathBuf, String> {
 }
 
 fn find_cli() -> Result<PathBuf, String> {
+    // 修复：显式指定的路径必须是真实文件；空值 / 无效值视为未设置，继续走内置查找。
+    // （旧版空值会原样传给 node，node 把空参数按工作目录解析，
+    //  崩溃为 EISDIR: illegal operation on a directory, lstat '<盘符根目录>'。）
     if let Ok(p) = std::env::var("NEBULA_SYNC_CLI") {
-        return Ok(PathBuf::from(p));
+        let trimmed = p.trim();
+        if !trimmed.is_empty() && PathBuf::from(trimmed).is_file() {
+            return Ok(PathBuf::from(trimmed));
+        }
+        eprintln!("[warn] NEBULA_SYNC_CLI 被设置为无效值（[{p}]），已忽略并改用内置查找");
     }
-    let mut candidates: Vec<PathBuf> = vec![
-        PathBuf::from("apps/sync/dist/cli.js"),
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../sync/dist/cli.js")),
-    ];
+    let mut candidates: Vec<PathBuf> = vec![];
+    // 修复：优先使用与 exe 同目录打包的 cli.js（NSIS 安装包内含，安装后自包含，
+    // 不再依赖构建机上的仓库路径）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("cli.js"));
+        }
+    }
+    candidates.push(PathBuf::from("apps/sync/dist/cli.js"));
+    candidates.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../sync/dist/cli.js")));
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             // target/debug 或 target/release 向上 4 层 = apps/
             candidates.push(dir.join("../../../../sync/dist/cli.js"));
         }
     }
-    for c in candidates {
+    for c in &candidates {
         if let Ok(abs) = c.canonicalize() {
             if abs.is_file() {
-                return Ok(abs);
+                // 关键：剥掉 \\?\ 前缀，否则 node 崩溃（EISDIR lstat 'D:'）
+                return Ok(strip_extended_prefix(abs));
             }
         }
     }
-    Err("未找到同步引擎 cli.js：请设置 NEBULA_SYNC_CLI 环境变量指向 apps/sync/dist/cli.js".into())
+    let searched = candidates
+        .iter()
+        .map(|c| c.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "未找到同步引擎 cli.js（已查找：{searched}）：请设置 NEBULA_SYNC_CLI 环境变量指向 apps/sync/dist/cli.js 文件"
+    ))
 }
 
 fn state_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // 修复：空值视为未设置（旧版会尝试 create_dir_all("") 并给出难以理解的报错）
     if let Ok(p) = std::env::var("NEBULA_SYNC_STATE") {
-        let p = PathBuf::from(p);
-        std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
-        return Ok(p);
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+            return Ok(p);
+        }
+        eprintln!("[warn] NEBULA_SYNC_STATE 被设置为空值，已忽略并改用默认目录");
     }
     let d = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let d = d.join("sync");
@@ -84,11 +130,39 @@ fn read_pipe_to_string<R: Read + Send>(mut pipe: R) -> String {
     buf
 }
 
+/// 追加一行到桌面端诊断日志（位于状态目录的上级，如 %APPDATA%/com.nebula.desktop/desktop.log）。
+/// 记录解析到的 node/cli 路径与命令失败详情，便于在用户机器上定位问题。
+fn append_diag_log(state_dir: &Path, line: &str) {
+    let Some(parent) = state_dir.parent() else {
+        return;
+    };
+    let log_path = parent.join("desktop.log");
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "[{ts}] {line}")
+        });
+}
+
 /// 执行同步引擎 CLI 并返回 stdout。
 /// env: 需要以环境变量（而非 argv）传递给子进程的敏感值，如 NEBULA_PASSWORD / NEBULA_TOKEN。
 fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String)]) -> Result<String, String> {
     let node = find_node()?;
     let cli = find_cli()?;
+    append_diag_log(
+        state_dir,
+        &format!(
+            "run_cli: node={} cli={} state_dir={} args=[{}]",
+            node.display(),
+            cli.display(),
+            state_dir.display(),
+            args.join(" ")
+        ),
+    );
     let mut cmd = Command::new(&node);
     cmd.arg(&cli);
     // --state-dir 是程序级选项，必须放在子命令之前
@@ -144,6 +218,18 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String
     let stderr = stderr_task.join().map_err(|_| "读取子进程输出失败".to_string())?;
     if !status.success() {
         let msg = format!("{}{}", stdout, stderr).trim().to_string();
+        append_diag_log(
+            state_dir,
+            &format!(
+                "run_cli FAILED: args=[{}] {}",
+                args.join(" "),
+                if msg.is_empty() {
+                    "（无输出）"
+                } else {
+                    msg.as_str()
+                }
+            ),
+        );
         return Err(if msg.is_empty() {
             "同步引擎执行失败".into()
         } else {
@@ -276,6 +362,16 @@ fn do_start_watch(app: &tauri::AppHandle, pair_id: Option<String>) -> Result<(),
     let node = find_node()?;
     let cli = find_cli()?;
     let sd = state_dir(app)?;
+    append_diag_log(
+        &sd,
+        &format!(
+            "start_watch: node={} cli={} state_dir={} pair={:?}",
+            node.display(),
+            cli.display(),
+            sd.display(),
+            pair_id
+        ),
+    );
     let mut cmd = Command::new(&node);
     cmd.arg(&cli);
     cmd.arg("--state-dir").arg(&sd);
@@ -416,4 +512,22 @@ fn main() {
                 kill_watch_on_exit(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 空值 NEBULA_SYNC_CLI 不得原样传给 node，应回退到内置查找并返回真实文件。
+    #[test]
+    fn empty_nebula_sync_cli_falls_through() {
+        std::env::set_var("NEBULA_SYNC_CLI", "");
+        let cli = find_cli().expect("空值 NEBULA_SYNC_CLI 应回退到内置查找");
+        assert!(
+            cli.is_file(),
+            "解析出的 cli.js 必须是真实文件：{}",
+            cli.display()
+        );
+        std::env::remove_var("NEBULA_SYNC_CLI");
+    }
 }

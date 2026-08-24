@@ -33,6 +33,7 @@ import sessionRoutes from './routes/session.routes.js';
 import { uploadService } from './services/upload.service.js';
 import { recycleService } from './services/recycle.service.js';
 import { settingNum } from './services/settings.service.js';
+import { fileIndex } from './services/fileIndex.service.js';
 
 function seedDefaultStorage(): void {
   const db = getDb();
@@ -69,12 +70,20 @@ function seedDefaultStorage(): void {
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: 'info' },
+    // P2-3 修复：日志中 redact token 字段，防止 JWT 进入日志/代理日志
+    logger: {
+      level: 'info',
+      redact: ['req.headers.authorization', 'req.query.token'],
+    },
     bodyLimit: 1024 * 1024 * 1024, // 1GB，分片上传
     maxParamLength: 512,
   });
 
-  await app.register(cors, { origin: true, credentials: true });
+  // P1-1 修复：CORS 收敛为显式 origin 列表（默认同源，无 CORS 头），防止任意来源带凭证跨域访问
+  // 开发环境可设 CORS_ORIGINS=http://localhost:5173 允许 Vite dev server 跨域
+  if (config.corsOrigins.length > 0) {
+    await app.register(cors, { origin: config.corsOrigins, credentials: true });
+  }
   await app.register(multipart, {
     limits: { fileSize: 1024 * 1024 * 1024, files: 100 },
   });
@@ -117,6 +126,10 @@ async function buildApp(): Promise<FastifyInstance> {
   };
   app.get('/uploads/background/:name', (req, reply) => {
     const name = (req.params as { name: string }).name;
+    // P1-2 修复：校验 name 是单层文件名，拒绝含 /、.. 的值
+    if (name.includes('/') || name.includes('..') || name.includes('\\')) {
+      return reply.code(404).send({ error: 'Not Found' });
+    }
     const file = path.join(dirs.backgrounds, name);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
       return reply.code(404).send({ error: 'Not Found' });
@@ -132,6 +145,10 @@ async function buildApp(): Promise<FastifyInstance> {
   };
   app.get('/uploads/logo/:name', (req, reply) => {
     const name = (req.params as { name: string }).name;
+    // P1-2 修复：校验 name 是单层文件名，拒绝含 /、.. 的值
+    if (name.includes('/') || name.includes('..') || name.includes('\\')) {
+      return reply.code(404).send({ error: 'Not Found' });
+    }
     const file = path.join(dirs.logo, name);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
       return reply.code(404).send({ error: 'Not Found' });
@@ -186,6 +203,16 @@ async function main() {
   purgeRecycle();
   const recycleTimer = setInterval(purgeRecycle, 3600 * 1000);
   recycleTimer.unref();
+
+  // P2-5: 定期刷新文件搜索索引（重建脏/空/过期的 local 存储索引）
+  const refreshIndex = () => {
+    fileIndex.refreshAll().catch((e: unknown) => {
+      console.error('[fileIndex] 定期刷新失败:', e instanceof Error ? e.message : e);
+    });
+  };
+  refreshIndex(); // 启动时预热（异步，不阻塞启动）
+  const indexTimer = setInterval(refreshIndex, 15 * 60 * 1000);
+  indexTimer.unref();
 
   await app.listen({ port: config.port, host: config.host });
   console.log(`\n  ${config.appName} 已启动: http://${config.host}:${config.port}`);

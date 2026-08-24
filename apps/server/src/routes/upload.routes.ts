@@ -65,13 +65,13 @@ export async function uploadRoutes(app: FastifyInstance) {
         if (!r) return fail(reply, 400, '缺少分片数据');
         uploadId = r.fields.uploadId || '';
         chunkIndex = Number(r.fields.chunkIndex || 0);
-        await uploadService.chunk(uploadId, chunkIndex, r.data);
+        await uploadService.chunk(uploadId, chunkIndex, r.data, req.user!.sub); // P2-1：绑定用户
       } else {
         const q = req.query as { uploadId?: string; chunkIndex?: string };
         uploadId = q.uploadId || '';
         chunkIndex = Number(q.chunkIndex || 0);
         const data = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body));
-        await uploadService.chunk(uploadId, chunkIndex, data);
+        await uploadService.chunk(uploadId, chunkIndex, data, req.user!.sub); // P2-1：绑定用户
       }
       return ok(reply, { ok: true });
     } catch (e: any) {

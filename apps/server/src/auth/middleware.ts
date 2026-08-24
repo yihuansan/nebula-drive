@@ -18,6 +18,10 @@ export async function authMiddleware(req: FastifyRequest, reply: FastifyReply) {
   if (!token) return reply.code(401).header('Cache-Control', 'no-store').send({ error: '未登录' });
   const payload = verifyJwt(token, jwtSecret);
   if (!payload) return reply.code(401).header('Cache-Control', 'no-store').send({ error: '登录已过期，请重新登录' });
+  // P0-6 修复：2FA 临时 token 只能用于 /auth/login/2fa，不能访问其他端点
+  if (payload.type === '2fa-temp') {
+    return reply.code(401).header('Cache-Control', 'no-store').send({ error: '临时 token 只能用于完成 2FA 验证' });
+  }
   // 检查 token 是否已被撤销
   const tokenHash = hashToken(token);
   if (isTokenRevoked(tokenHash)) {

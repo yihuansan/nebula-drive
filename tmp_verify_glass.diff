@@ -1,0 +1,184 @@
+﻿diff --git a/apps/web/src/glass.css b/apps/web/src/glass.css
+index 01ce323..00e509a 100644
+--- a/apps/web/src/glass.css
++++ b/apps/web/src/glass.css
+@@ -98,77 +98,139 @@
+   border-radius: 12px;
+ }
+ 
+-/* ---------- 布局 6：仪表盘 ---------- */
++/* ---------- 布局 6：仪表盘（现代控制中心：slate 深底 + sky 强调，WCAG AA） ---------- */
+ [data-theme='dashboard'] {
+-  --bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
++  --bg: #0f172a;
+   --blur: 20px;
+-  --glass-bg: rgba(255, 255, 255, 0.25);
+-  --glass-bg-hover: rgba(255, 255, 255, 0.4);
+-  --glass-border: rgba(255, 255, 255, 0.3);
+-  --glass-highlight: rgba(255, 255, 255, 0.5);
+-  --text: #ffffff;
+-  --text-secondary: rgba(255, 255, 255, 0.7);
+-  --accent: #fbbf24;
+-  --accent-soft: rgba(251, 191, 36, 0.2);
+-  --surface: rgba(255, 255, 255, 0.15);
+-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+-  --shadow-hover: 0 16px 40px rgba(0, 0, 0, 0.3);
++  --glass-bg: rgba(30, 41, 59, 0.6);
++  --glass-bg-hover: rgba(51, 65, 85, 0.75);
++  --glass-border: rgba(148, 163, 184, 0.25);
++  --glass-highlight: rgba(148, 163, 184, 0.4);
++  --text: #f8fafc;
++  --text-secondary: #94a3b8;
++  --accent: #38bdf8;
++  --accent-soft: rgba(56, 189, 248, 0.15);
++  --surface: rgba(30, 41, 59, 0.8);
++  --shadow: 0 8px 24px rgba(2, 6, 23, 0.5);
++  --shadow-hover: 0 16px 40px rgba(2, 6, 23, 0.6);
++  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
++}
++[data-theme='dashboard'] .glass,
++[data-theme='dashboard'] .glass-card,
++[data-theme='dashboard'] .glass-btn {
++  border-radius: 12px;
++}
++[data-theme='dashboard'] .el-button--primary {
++  background: #38bdf8;
++  border-color: #38bdf8;
++  color: #0f172a;
++}
++[data-theme='dashboard'] .el-dialog {
++  background: #1e293b;
++  border: 1px solid #334155;
++  border-radius: 12px;
++  box-shadow: 0 24px 64px rgba(2, 6, 23, 0.6);
++}
++[data-theme='dashboard'] .el-input__wrapper {
++  background: #0f172a;
++  box-shadow: 0 0 0 1px #334155 inset;
++}
++[data-theme='dashboard'] .el-input__wrapper:focus,
++[data-theme='dashboard'] .el-input__wrapper:focus-within {
++  box-shadow: 0 0 0 1px #38bdf8 inset;
+ }
+ 
+-/* ---------- 布局 7：便当盒 ---------- */
++/* ---------- 布局 7：便当盒（分层底 + 实底白卡 + 彩色 tile） ---------- */
+ [data-theme='bento'] {
+   --bg: #f0f4f8;
+   --blur: 0px;
+-  --glass-bg: rgba(255, 255, 255, 0.9);
+-  --glass-bg-hover: rgba(255, 255, 255, 1);
+-  --glass-border: rgba(0, 0, 0, 0.06);
++  --glass-bg: #ffffff;
++  --glass-bg-hover: #ffffff;
++  --glass-border: #e2e8f0;
+   --glass-highlight: rgba(255, 255, 255, 0.8);
+   --text: #1e293b;
+-  --text-secondary: rgba(30, 41, 59, 0.55);
++  --text-secondary: #64748b;
+   --accent: #10b981;
+-  --accent-soft: rgba(16, 185, 129, 0.1);
+-  --surface: rgba(255, 255, 255, 0.85);
+-  --shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+-  --shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.1);
++  --accent-soft: rgba(16, 185, 129, 0.12);
++  --surface: #ffffff;
++  --shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
++  --shadow-hover: 0 12px 28px rgba(15, 23, 42, 0.12);
++  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+ }
+ [data-theme='bento'] .glass,
+ [data-theme='bento'] .glass-card,
+ [data-theme='bento'] .glass-btn {
+   border-radius: 16px;
+ }
++[data-theme='bento'] .el-button--primary {
++  background: #10b981;
++  border-color: #10b981;
++  color: #052e16;
++}
++[data-theme='bento'] .el-button--primary:hover {
++  background: #10b981;
++  border-color: #10b981;
++  color: #052e16;
++  transform: translateY(-1px);
++  box-shadow: var(--shadow-hover);
++}
++[data-theme='bento'] .el-dialog {
++  background: #ffffff;
++  border: 1px solid #e2e8f0;
++  border-radius: 16px;
++  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.12);
++}
++[data-theme='bento'] .el-input__wrapper {
++  background: #ffffff;
++  box-shadow: 0 0 0 1px #e2e8f0 inset;
++}
++[data-theme='bento'] .el-input__wrapper:focus,
++[data-theme='bento'] .el-input__wrapper:focus-within {
++  box-shadow: 0 0 0 1px #10b981 inset;
++}
+ 
+-/* ---------- 布局 8：命令式 ---------- */
++/* ---------- 布局 8：命令式（中性深底 + 橙色强调；等宽仅命令区） ---------- */
+ [data-theme='command'] {
+-  --bg: #000000;
++  --bg: #16181d;
+   --blur: 0px;
+-  --glass-bg: rgba(30, 30, 30, 0.95);
+-  --glass-bg-hover: rgba(40, 40, 40, 1);
+-  --glass-border: rgba(255, 255, 255, 0.15);
+-  --glass-highlight: rgba(255, 255, 255, 0.1);
+-  --text: #e5e5e5;
+-  --text-secondary: rgba(229, 229, 229, 0.5);
++  --glass-bg: #1e2128;
++  --glass-bg-hover: #262a33;
++  --glass-border: #2e323c;
++  --glass-highlight: rgba(230, 232, 236, 0.12);
++  --text: #e6e8ec;
++  --text-secondary: #9aa1ad;
+   --accent: #ff6b35;
+   --accent-soft: rgba(255, 107, 53, 0.15);
+-  --surface: rgba(20, 20, 20, 0.95);
+-  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+-  --shadow-hover: 0 0 0 2px rgba(255, 107, 53, 0.5);
+-}
+-[data-theme='command'] body {
+-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
++  --surface: #1a1c22;
++  --shadow: 0 0 0 1px #2e323c;
++  --shadow-hover: 0 0 0 2px rgba(255, 107, 53, 0.6);
+ }
+ [data-theme='command'] .glass,
+ [data-theme='command'] .glass-card,
+ [data-theme='command'] .glass-btn {
+   border-radius: 6px;
+ }
++[data-theme='command'] .el-button--primary {
++  background: #ff6b35;
++  border-color: #ff6b35;
++  color: #14161b;
++}
+ [data-theme='command'] .el-dialog {
+-  background: #1a1a1a;
+-  border: 1px solid rgba(255, 255, 255, 0.2);
++  background: #1e2128;
++  border: 1px solid #2e323c;
++  border-radius: 6px;
++}
++[data-theme='command'] .el-input__wrapper {
++  background-color: #16181d;
++  box-shadow: 0 0 0 1px #2e323c inset;
++}
++[data-theme='command'] .el-input__wrapper:focus,
++[data-theme='command'] .el-input__wrapper:focus-within {
++  box-shadow: 0 0 0 1px #ff6b35 inset;
+ }
+-[data-theme='command'] .el-input__wrapper,
+ [data-theme='command'] .el-textarea__inner,
+ [data-theme='command'] .el-select__wrapper {
+-  background-color: #1a1a1a;
++  background-color: #16181d;
+ }
+ 
+ /* ---------- 主题 5：赛博霓虹 ---------- */

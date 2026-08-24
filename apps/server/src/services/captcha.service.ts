@@ -16,12 +16,46 @@ export function generateCaptchaCode(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-/** 创建验证码，返回 { id, code } */
-export function createCaptcha(): { id: string; code: string } {
+/** 创建验证码，返回 { id, code, image } */
+export function createCaptcha(): { id: string; code: string; image: string } {
   const id = generateCaptchaId();
   const code = generateCaptchaCode();
   captchaStore.set(id, { code, expires: Date.now() + 5 * 60 * 1000 });
-  return { id, code };
+  const image = generateCaptchaImage(code);
+  return { id, code, image };
+}
+
+/**
+ * P1-4 修复：生成验证码 SVG 图片（base64），替代明文 code 返回。
+ * 前端展示图片，用户看图输入，code 不直接返回。
+ */
+function generateCaptchaImage(code: string): string {
+  const width = 160;
+  const height = 56;
+  // 生成干扰线
+  const lines: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const x1 = Math.random() * width;
+    const y1 = Math.random() * height;
+    const x2 = Math.random() * width;
+    const y2 = Math.random() * height;
+    lines.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ccc" stroke-width="1"/>`);
+  }
+  // 生成数字
+  const chars = code.split('');
+  const charWidth = width / (chars.length + 1);
+  const texts = chars.map((c, i) => {
+    const x = charWidth * (i + 1) + (Math.random() * 6 - 3);
+    const y = 38 + (Math.random() * 8 - 4);
+    const rotate = Math.random() * 30 - 15;
+    return `<text x="${x}" y="${y}" font-size="32" font-family="monospace" fill="#333" transform="rotate(${rotate}, ${x}, ${y})">${c}</text>`;
+  }).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+    <rect width="${width}" height="${height}" fill="#f5f5f5"/>
+    ${lines.join('')}
+    ${texts}
+  </svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
 /** 验证验证码 */

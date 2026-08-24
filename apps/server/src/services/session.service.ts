@@ -72,7 +72,8 @@ export function revokeOtherSessions(userId: number, currentTokenHash: string, to
 /** 检查 token 是否已被撤销 */
 export function isTokenRevoked(tokenHash: string): boolean {
   const db = getDb();
-  const row = db.prepare('SELECT 1 FROM revoked_tokens WHERE token_hash = ?').get(tokenHash);
+  // P2-14 修复：检查 expires_at，过期的撤销记录不再有效
+  const row = db.prepare("SELECT 1 FROM revoked_tokens WHERE token_hash = ? AND expires_at > datetime('now')").get(tokenHash);
   return !!row;
 }
 

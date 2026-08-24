@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
+import crypto from 'node:crypto';
 import { authMiddleware, ok, fail } from '../auth/middleware.js';
 import { getDb } from '../db/index.js';
 import { getStorageRecord, fileService } from '../services/file.service.js';
+import { fileIndex } from '../services/fileIndex.service.js';
+import { usageCache } from '../services/usageCache.service.js';
 import { getDriver } from '../storage/registry.js';
 
 export async function newFeaturesRoutes(app: FastifyInstance) {
@@ -12,7 +15,6 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     try {
       const rec = getStorageRecord(Number(storageId));
       if (!rec) return fail(reply, 404, '存储不存在');
-      const { entries } = await fileService.list(Number(storageId), '/', 'name', 'asc');
       
       // 定义文件类型扩展名
       const VIDEO_EXTS = ['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv', 'webm'];
@@ -22,14 +24,25 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       if (type === 'video') exts = VIDEO_EXTS;
       else if (type === 'document') exts = DOC_EXTS;
       
-      // 过滤文件
-      const filtered = entries.filter((e) => {
-        if (e.isDir) return false;
-        const ext = e.name.split('.').pop()?.toLowerCase() || '';
-        return exts.includes(ext);
-      });
+      // P2-8 修复：递归扫描所有子目录
+      const allEntries: any[] = [];
+      const scanDir = async (dirPath: string) => {
+        const { entries } = await fileService.list(Number(storageId), dirPath, 'name', 'asc');
+        for (const e of entries) {
+          if (e.isDir) {
+            // 递归扫描子目录
+            await scanDir(dirPath === '/' ? '/' + e.name : dirPath + '/' + e.name);
+          } else {
+            const ext = e.name.split('.').pop()?.toLowerCase() || '';
+            if (exts.includes(ext)) {
+              allEntries.push(e);
+            }
+          }
+        }
+      };
+      await scanDir('/');
       
-      return ok(reply, { entries: filtered });
+      return ok(reply, { entries: allEntries });
     } catch (e: any) {
       return fail(reply, 500, e.message || '加载失败');
     }
@@ -44,35 +57,39 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       if (!rec) return fail(reply, 404, '存储不存在');
       const db = getDb();
       const userId = req.user ? (req.user as any).sub : null;
+      const driver = getDriver(rec);
       
       // 从 recent_access 表获取该用户的访问记录
       const rows = db.prepare(
         'SELECT * FROM recent_access WHERE user_id = ? AND storage_id = ? ORDER BY accessed_at DESC LIMIT ?'
       ).all(userId, Number(storageId), Number(limit)) as any[];
       
+      // P2-9 修复：批量 stat，避免 N+1
+      const stats = await Promise.all(rows.map((row) => driver.stat(row.path).catch(() => null)));
+      
       // 验证文件是否还存在，移除不存在的
       const validEntries: any[] = [];
-      for (const row of rows) {
-        try {
-          const driver = getDriver(rec);
-          const stat = await driver.stat(row.path);
-          if (stat) {
-            validEntries.push({
-              path: row.path,
-              name: row.name,
-              isDir: row.is_dir === 1,
-              size: stat.size || 0,
-              mtime: stat.mtime || row.accessed_at,
-              accessed_at: row.accessed_at,
-            });
-          } else {
-            // 文件不存在，从记录中删除
-            db.prepare('DELETE FROM recent_access WHERE id = ?').run(row.id);
-          }
-        } catch {
-          // 文件不存在，从记录中删除
-          db.prepare('DELETE FROM recent_access WHERE id = ?').run(row.id);
+      const deleteIds: number[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const stat = stats[i];
+        if (stat) {
+          validEntries.push({
+            path: row.path,
+            name: row.name,
+            isDir: row.is_dir === 1,
+            size: stat.size || 0,
+            mtime: stat.mtime || row.accessed_at,
+            accessed_at: row.accessed_at,
+          });
+        } else {
+          deleteIds.push(row.id);
         }
+      }
+      // 批量删除不存在的记录
+      if (deleteIds.length) {
+        const placeholders = deleteIds.map(() => '?').join(', ');
+        db.prepare(`DELETE FROM recent_access WHERE id IN (${placeholders})`).run(...deleteIds);
       }
       
       return ok(reply, { entries: validEntries });
@@ -173,16 +190,15 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     if (password.length < 4) return fail(reply, 400, '密码至少 4 位');
     
     const db = getDb();
+    // P1-9 修复：使用 scrypt 哈希 + 随机盐，防止可逆泄露
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
     // 检查是否已存在
     const existing = db.prepare('SELECT * FROM hidden_space_settings WHERE storage_id = ?').get(Number(storageId)) as any;
     if (existing) {
-      // 更新密码（简单哈希）
-      const hash = Buffer.from(password).toString('hex');
-      db.prepare('UPDATE hidden_space_settings SET password_hash = ? WHERE storage_id = ?').run(hash, Number(storageId));
+      db.prepare('UPDATE hidden_space_settings SET password_hash = ?, salt = ? WHERE storage_id = ?').run(hash, salt, Number(storageId));
     } else {
-      // 创建新记录
-      const hash = Buffer.from(password).toString('hex');
-      db.prepare('INSERT INTO hidden_space_settings (storage_id, password_hash, created_at) VALUES (?, ?, datetime(\'now\'))').run(Number(storageId), hash);
+      db.prepare('INSERT INTO hidden_space_settings (storage_id, password_hash, salt, created_at) VALUES (?, ?, ?, datetime(\'now\'))').run(Number(storageId), hash, salt);
     }
     return ok(reply, { success: true });
   });
@@ -198,8 +214,9 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       return fail(reply, 400, '请先设置密码');
     }
     
-    // 验证密码（简单哈希）
-    const hash = Buffer.from(password).toString('hex');
+    // P1-9 修复：使用 scrypt 验证密码
+    const salt = existing.salt || '';
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
     if (existing.password_hash !== hash) {
       return ok(reply, { unlocked: false });
     }
@@ -211,6 +228,9 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
         const driver = getDriver(rec);
         // 尝试创建 hidden 目录
         await driver.mkdir('/hidden');
+        // P2-5/P2-6: 新建目录 → 使搜索索引与用量缓存失效
+        fileIndex.markDirty(Number(storageId));
+        usageCache.invalidate(Number(storageId));
       }
     } catch {
       // 目录可能已存在，忽略错误

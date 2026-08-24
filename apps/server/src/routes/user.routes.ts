@@ -10,6 +10,7 @@ import {
   randomPassword,
 } from '../services/user.service.js';
 import { settingNum } from '../services/settings.service.js';
+import { opLog } from '../services/log.service.js';
 
 /** 密码长度策略：返回 null 表示通过，否则返回错误消息 */
 function checkPasswordLen(pwd: string): string | null {
@@ -69,6 +70,8 @@ export async function userRoutes(app: FastifyInstance) {
     const id = Number((req.params as { id: string }).id);
     const pwd = randomPassword();
     updateUser(id, { password: pwd });
-    return ok(reply, { password: pwd });
+    // P2-12 修复：记录操作日志 + 标注"仅显示一次"
+    opLog(req.user!.sub, req.user!.username, 'user_reset_password', `用户 #${id}`);
+    return ok(reply, { password: pwd, notice: '此密码仅显示一次，请妥善保管' });
   });
 }

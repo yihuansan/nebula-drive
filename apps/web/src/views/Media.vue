@@ -174,6 +174,7 @@ function fmtTime(ts: string) {
           class="preview-pdf"
           width="100%"
           height="65vh"
+          sandbox="allow-scripts"
         ></iframe>
         <pre v-else-if="previewKind === 'code' && previewUrl" class="preview-code">
           <code>{{ previewName }}</code>

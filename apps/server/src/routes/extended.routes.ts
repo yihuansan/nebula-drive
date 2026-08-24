@@ -131,6 +131,12 @@ export async function extendedRoutes(app: FastifyInstance) {
 
   app.delete('/files/:path/comments/:id', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
+    // P1-6 修复：只有注释作者或管理员才能删除
+    const comment = commentService.byId(id);
+    if (!comment) return fail(reply, 404, '注释不存在');
+    if (comment.user_id !== req.user!.sub && req.user!.role !== 'admin') {
+      return fail(reply, 403, '无权限删除此注释');
+    }
     commentService.remove(id);
     return ok(reply, { ok: true });
   });
@@ -150,7 +156,8 @@ export async function extendedRoutes(app: FastifyInstance) {
 
   app.delete('/favorites', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const q = req.query as { storageId?: string; path?: string };
-    favoriteService.remove(req.user!.sub, Number(q.storageId), decodeURIComponent(q.path || ''));
+    // P2-13 修复：Fastify 已自动解码 query 参数，不需要再次 decodeURIComponent
+    favoriteService.remove(req.user!.sub, Number(q.storageId), q.path || '');
     return ok(reply, { ok: true });
   });
 

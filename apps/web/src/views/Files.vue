@@ -977,6 +977,8 @@ function isVideo(name: string) {
 function isAudio(name: string) {
   return AUDIO_EXTS.includes(extOf(name));
 }
+// FE-3: HTML/JS 文件不允许内联预览（防 XSS / 脚本执行），一律强制下载
+const DANGEROUS_HTML_JS_EXTS = ['html', 'htm', 'js', 'jsx', 'mjs'];
 const CODE_EXTS = ['js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'html', 'css', 'json', 'sh', 'vue', 'go', 'rs', 'xml', 'yml', 'yaml', 'md', 'txt', 'sql', 'ini', 'conf', 'env'];
 function isCode(name: string) {
   return CODE_EXTS.includes(extOf(name));
@@ -1018,6 +1020,8 @@ async function openArchivePreview(row: any) {
 }
 async function openPreview(row: any) {
   if (row.isDir) return;
+  // FE-3: HTML/JS 文件强制下载，禁止内联预览
+  if (DANGEROUS_HTML_JS_EXTS.includes(extOf(row.name))) return download(row);
   const kind = isVideo(row.name) ? 'video' : isAudio(row.name) ? 'audio' : isPdf(row.name) ? 'pdf' : isImage(row.name) ? 'image' : isCode(row.name) ? 'code' : null;
   if (!kind) return download(row);
   
@@ -2257,6 +2261,7 @@ onMounted(async () => {
           class="preview-pdf"
           width="100%"
           height="65vh"
+          sandbox="allow-scripts"
         ></iframe>
         <!-- 代码预览 -->
         <pre v-else-if="previewKind === 'code' && previewUrl" class="preview-code">

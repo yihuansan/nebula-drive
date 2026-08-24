@@ -4,6 +4,7 @@ import { shareService } from '../services/share.service.js';
 import { shareStatsService } from '../services/shareStats.service.js';
 import { config } from '../config.js';
 import { settingNum } from '../services/settings.service.js';
+import { safeRelPath } from '../utils/path.js';
 
 export async function shareRoutes(app: FastifyInstance) {
   app.get('/shares', { preHandler: requirePermission('files:share') }, async (req, reply) => {
@@ -102,7 +103,7 @@ export async function shareRoutes(app: FastifyInstance) {
   });
 
   // ===== 分享转存（登录用户将分享文件保存到网盘）=====
-  app.post('/s/:token/transfer', { preHandler: requirePermission('files:upload') }, async (req, reply) => {
+  app.post('/s/:token/transfer', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const b = req.body as { ticket?: string; paths?: string[]; destPath?: string };
     const token = String((req.params as { token: string }).token);
     if (!shareService.verifyTicket(b.ticket || '', token)) {
@@ -110,11 +111,10 @@ export async function shareRoutes(app: FastifyInstance) {
     }
     if (!b.paths?.length) return fail(reply, 400, '缺少文件列表');
 
-    const userId = req.user!.sub;
-    // 查找用户默认存储
+    // 查找第一个启用的存储（全局共享）
     const { getDb } = await import('../db/index.js');
     const db = getDb();
-    const storage = db.prepare('SELECT * FROM storages WHERE user_id = ? ORDER BY id LIMIT 1').get(userId) as any;
+    const storage = db.prepare('SELECT * FROM storages WHERE enabled = 1 ORDER BY sort, id LIMIT 1').get() as any;
     if (!storage) return fail(reply, 404, '请先创建存储空间');
 
     const { dirs } = await import('../config.js');
@@ -122,13 +122,16 @@ export async function shareRoutes(app: FastifyInstance) {
     const path = await import('node:path');
 
     const destBase = b.destPath || '/';
+    // P0-5 修复：校验 destPath 在 storageRoot 内，防止任意位置写文件
+    const destDirValidated = safeRelPath(destBase === '/' ? '' : destBase, dirs.storageRoot);
+    if (!destDirValidated) return fail(reply, 400, '非法目标路径');
     const transferred: string[] = [];
     const errors: string[] = [];
 
     for (const p of b.paths) {
       try {
         const { stream, name } = await shareService.publicDownload(token, p);
-        const destDir = path.join(dirs.storageRoot, (destBase === '/' ? '' : destBase).replace(/^\//, ''));
+        const destDir = destDirValidated;
         if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
         const destFile = path.join(destDir, name);
         // 流式写入

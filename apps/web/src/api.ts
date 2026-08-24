@@ -32,10 +32,29 @@ export async function api<T = any>(path: string, init: RequestInit & { raw?: boo
   return data.data as T;
 }
 
-export function downloadUrl(path: string, params: Record<string, string> = {}) {
+/**
+ * P2-4 修复：下载文件时使用 Authorization 头 + blob，避免 token 进入 query string
+ * 浏览器历史/代理日志泄露
+ */
+export async function downloadFile(path: string, params: Record<string, string> = {}, filename?: string): Promise<void> {
   const q = new URLSearchParams(params);
   const token = localStorage.getItem('nebula_token') || '';
-  return `${BASE}${path}?${q.toString()}&token=${token}`;
+  const res = await fetch(`${BASE}${path}?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `下载失败 (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || path.split('/').pop() || 'download';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export function fmtSize(n: number): string {

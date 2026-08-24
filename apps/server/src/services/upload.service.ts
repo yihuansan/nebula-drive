@@ -6,6 +6,18 @@ import { getDb } from '../db/index.js';
 import { getDriver } from '../storage/registry.js';
 import { dirs, config } from '../config.js';
 import { opLog } from './log.service.js';
+import { fileIndex } from './fileIndex.service.js';
+import { usageCache } from './usageCache.service.js';
+
+/** P2-5/P2-6: 上传完成后使搜索索引与用量缓存失效 */
+function invalidateCaches(storageId: number): void {
+  try {
+    fileIndex.markDirty(storageId);
+    usageCache.invalidate(storageId);
+  } catch {
+    // 缓存失效失败不影响主流程
+  }
+}
 
 interface UploadMeta {
   uploadId: string;
@@ -17,6 +29,8 @@ interface UploadMeta {
   received: number;
   status: 'uploading' | 'completed';
   createdAt: number;
+  /** P2-1 修复：绑定用户 ID，防止跨用户操作 */
+  userId?: number;
 }
 
 const memory = new Map<string, UploadMeta>();
@@ -45,13 +59,16 @@ export const uploadService = {
       received: 0,
       status: 'uploading',
       createdAt: Date.now(),
+      userId: params.userId, // P2-1 修复：绑定用户
     });
     return { uploadId, chunkSize };
   },
 
-  async chunk(uploadId: string, chunkIndex: number, body: Buffer): Promise<void> {
+  async chunk(uploadId: string, chunkIndex: number, body: Buffer, userId?: number): Promise<void> {
     const m = memory.get(uploadId);
     if (!m) throw new Error('上传会话不存在');
+    // P2-1 修复：校验用户身份
+    if (m.userId !== undefined && m.userId !== userId) throw new Error('无权操作此上传会话');
     if (m.status === 'completed') throw new Error('上传已完成');
     const expected = Math.ceil(m.size / m.chunkSize);
     if (chunkIndex >= expected) throw new Error('分片序号越界');
@@ -62,6 +79,8 @@ export const uploadService = {
   async complete(uploadId: string, user?: { username: string; id?: number }): Promise<void> {
     const m = memory.get(uploadId);
     if (!m) throw new Error('上传会话不存在');
+    // P2-1 修复：校验用户身份
+    if (m.userId !== undefined && m.userId !== user?.id) throw new Error('无权操作此上传会话');
     if (m.status === 'completed') return;
     const dir = tmpDir(uploadId);
     const chunks = fs.readdirSync(dir).filter((f) => /^\d+$/.test(f)).sort((a, b) => Number(a) - Number(b));
@@ -71,12 +90,23 @@ export const uploadService = {
     }
     const rec = getDb().prepare('SELECT * FROM storages WHERE id = ?').get(m.storageId) as any;
     const driver = getDriver(rec);
-    // 逐块合并上传
-    const bufs: Buffer[] = [];
-    for (const c of chunks) bufs.push(fs.readFileSync(path.join(dir, c)));
-    await driver.upload(m.destPath, Readable.from(bufs));
+    // P1-3 修复：流式合并分片，避免全量读入内存
+    let chunkIndex = 0;
+    const stream = new Readable({
+      read() {
+        if (chunkIndex >= chunks.length) {
+          this.push(null);
+          return;
+        }
+        const buf = fs.readFileSync(path.join(dir, chunks[chunkIndex]));
+        chunkIndex++;
+        this.push(buf);
+      },
+    });
+    await driver.upload(m.destPath, stream);
     fs.rmSync(dir, { recursive: true, force: true });
     m.status = 'completed';
+    invalidateCaches(m.storageId);
     opLog(user?.id, user?.username, 'upload', m.destPath);
   },
 
@@ -86,6 +116,7 @@ export const uploadService = {
     if (!rec) throw new Error('存储不存在或已禁用');
     const driver = getDriver(rec);
     await driver.upload(params.path, Readable.from([data]));
+    invalidateCaches(params.storageId);
     opLog(user?.id, user?.username, 'upload_direct', params.path);
   },
 
