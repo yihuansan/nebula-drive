@@ -143,10 +143,27 @@ async function updateNow() {
       ElMessage.info('正在下载新版本包，请稍候...');
       const r = await api('/system/perform-update', { method: 'POST' });
       ElMessage.success(r.message || '更新成功，服务器即将重启');
-      // 等待服务器重启后刷新页面
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
+      // P1-2：轮询 /health 通过后再刷新（而非固定 3s），消除撞停机窗口的"无法连接"
+      const doReload = () => window.location.reload();
+      const startPoll = Date.now();
+      const poll = setInterval(() => {
+        // 超过 30s 兜底刷新（避免无限轮询）
+        if (Date.now() - startPoll > 30000) {
+          clearInterval(poll);
+          doReload();
+          return;
+        }
+        fetch('/health', { method: 'GET' })
+          .then((res) => {
+            if (res.ok) {
+              clearInterval(poll);
+              setTimeout(doReload, 300); // 留 300ms 让新 server 完全就绪
+            }
+          })
+          .catch(() => {
+            // 服务器尚未起来，继续轮询
+          });
+      }, 2000);
     } catch (e: any) {
       ElMessage.error(e.message || '更新失败');
     }
@@ -167,7 +184,7 @@ const pageTitle = computed(() => {
     '/recent': '最近',
     '/favorites': '我的收藏',
     '/quick-access': '快捷访问',
-    '/media': '视频文档',
+    '/media': '媒体库',
     '/hidden': '隐藏空间',
     '/subscriptions': '转存和订阅',
     '/shares': '共享',
@@ -190,7 +207,7 @@ const mainMenuAll = [
   { path: '/recent', label: '最近', icon: 'Clock', perm: 'files:view' },
   { path: '/favorites', label: '我的收藏', icon: 'StarFilled', perm: 'files:view' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star', perm: 'files:view' },
-  { path: '/media', label: '视频文档', icon: 'VideoCamera', perm: 'files:view' },
+  { path: '/media', label: '媒体库', icon: 'VideoCamera', perm: 'files:view' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock', perm: 'files:view' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download', perm: 'files:share' },
   { path: '/shares', label: '共享', icon: 'Share', perm: 'files:share' },
@@ -1141,14 +1158,45 @@ function applyBackground(s?: any) {
   flex-shrink: 0;
 }
 
-/* 更新详情弹窗样式 */
-:global(.release-dialog) {
+/* ---------- 更新详情弹窗：跟随全部 9 个主题 ----------
+   ElMessageBox 会 teleport 到 body，但主题变量定义在 <html data-theme> 上，
+   可正常继承。背景复用 --bg（页面背景）：各主题的 --text 本就设计为
+   置于 --bg 之上，对比度与主界面一致，彻底避免白底浅色字不可读。 */
+:global(.release-dialog.el-message-box) {
+  /* 宽度锁定 560px：切勿再加 max-width:calc(100vw-48px)——那会把盒子撑成近乎全宽，
+     内容左对齐在全宽盒子里，看起来"偏在一侧"。ElMessageBox 默认用
+     text-align:center + ::after 做双向居中，560px 窄盒自然居中。 */
   --el-message-box-width: 560px;
+  max-height: calc(100vh - 48px);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-hover);
+  /* 双保险：fixed + 双向 50% 位移强制屏幕居中（不依赖 overlay 内部结构），限高防溢出。 */
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+}
+/* 标题栏文字跟随主题 */
+:global(.release-dialog .el-message-box__title) {
+  color: var(--text);
+  font-weight: 600;
+}
+/* 正文容器：限高 + 滚动，长更新说明不再溢出 */
+:global(.release-dialog .el-message-box__message) {
+  color: var(--text);
+  text-align: left;
+  max-height: 65vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 :global(.release-notes) {
-  line-height: 1.7;
+  line-height: 1.75;
   font-size: 14px;
   color: var(--text);
+  word-break: break-word;
 }
 :global(.release-notes h3) {
   font-size: 18px;

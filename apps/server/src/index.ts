@@ -70,10 +70,15 @@ function seedDefaultStorage(): void {
 }
 
 async function buildApp(): Promise<FastifyInstance> {
+  // P0-2：日志级别可配（LOG_LEVEL 环境变量，默认 info）。
+  // 需要时设 LOG_LEVEL=warn 可全局静音 info 级访问日志（如更新时终端里的 pino 行）。
+  const VALID_LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
+  const envLevel = process.env.LOG_LEVEL;
+  const logLevel = envLevel && VALID_LOG_LEVELS.includes(envLevel) ? envLevel : 'info';
   const app = Fastify({
     // P2-3 修复：日志中 redact token 字段，防止 JWT 进入日志/代理日志
     logger: {
-      level: 'info',
+      level: logLevel,
       redact: ['req.headers.authorization', 'req.query.token'],
     },
     bodyLimit: 1024 * 1024 * 1024, // 1GB，分片上传

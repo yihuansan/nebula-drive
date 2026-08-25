@@ -80,7 +80,7 @@ const mainMenuAll = [
   { path: '/recent', label: '最近全部', icon: 'Clock' },
   { path: '/favorites', label: '我的收藏', icon: 'StarFilled' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star' },
-  { path: '/media', label: '视频文档', icon: 'VideoCamera' },
+  { path: '/media', label: '媒体库', icon: 'VideoCamera' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download' },
   { path: '/shares', label: '我的分享', icon: 'Share' },

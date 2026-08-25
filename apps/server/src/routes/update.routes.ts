@@ -323,16 +323,19 @@ try {
       }
 
       script += `
-// 启动新服务器
+// 启动新服务器（P1-3：stdout/stderr 重定向到 server.log，避免更新后日志丢失）
 log('启动新服务器...');
 try {
+  const serverLogFile = ${JSON.stringify(path.join(process.cwd(), 'server.log'))};
+  const logFd = fs.openSync(serverLogFile, 'a');
   const child = spawn(process.execPath, [${JSON.stringify(path.join(process.cwd(), 'dist', 'index.js'))}], {
     cwd: ${JSON.stringify(process.cwd())},
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
   });
   child.unref();
-  log('服务器已启动');
+  fs.closeSync(logFd);
+  log('服务器已启动（日志写入 server.log）');
 } catch (e) {
   log('启动服务器失败: ' + e.message);
 }
@@ -364,6 +367,9 @@ log('=== 重启脚本完成 ===');
       });
 
       log('=== 更新已启动，服务器将在几秒后重启 ===');
+      // P0-1：说明日志——本请求完成后 Fastify 会打出一行 pino JSON（msg:"request completed"），
+      // 那是正常的访问日志（200=成功），不是错误。放在 return 前，确保先于 pino 行出现。
+      log('提示：终端随后出现的一行 pino JSON（msg:"request completed"）是 Fastify 正常访问日志，非错误，可忽略');
 
       return ok(reply, { message: '更新成功，服务器即将重启' });
     } catch (e: any) {

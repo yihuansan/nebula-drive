@@ -55,7 +55,10 @@ export async function uploadRoutes(app: FastifyInstance) {
   });
 
   // 分片上传：multipart（file 字段）或 raw 二进制体（query 传 uploadId/chunkIndex）
-  app.post('/upload/chunk', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+  // 分片上传是高频端点（大文件 = 数千个分片请求），豁免全局限流，
+  // 避免 30GB 之类的大文件上传撞 300 次/分钟/IP 限流后把整个页面卡死。
+  // 该端点已有 files:write 权限门槛 + 单片大小受限，滥用风险可控。
+  app.post('/upload/chunk', { preHandler: requirePermission('files:write'), config: { rateLimit: false } }, async (req, reply) => {
     const isMultipart = String(req.headers['content-type'] || '').includes('multipart');
     let uploadId = '';
     let chunkIndex = 0;

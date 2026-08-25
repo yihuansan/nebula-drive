@@ -17,3 +17,6 @@ src-tauri/target/
 nebula-drive-v*.zip
 backup-web-src-20260822/
 .data-test/
+.v*-stage/
+.dsh-vision-router/
+*.sha256

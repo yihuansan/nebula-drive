@@ -69,6 +69,19 @@ export function revokeOtherSessions(userId: number, currentTokenHash: string, to
   return result.changes;
 }
 
+/** 撤销用户的全部会话（admin 强制下线）：所有 token 加入撤销列表并删除会话记录 */
+export function revokeAllSessions(userId: number, tokenExpiryHours: number): number {
+  const db = getDb();
+  const sessions = db.prepare('SELECT token_hash FROM user_sessions WHERE user_id = ?').all(userId) as any[];
+  const expiresAt = new Date(Date.now() + tokenExpiryHours * 3600 * 1000).toISOString();
+  const insert = db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)');
+  for (const s of sessions) {
+    insert.run(s.token_hash, userId, expiresAt);
+  }
+  const result = db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+  return result.changes;
+}
+
 /** 检查 token 是否已被撤销 */
 export function isTokenRevoked(tokenHash: string): boolean {
   const db = getDb();
