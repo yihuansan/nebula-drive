@@ -3,6 +3,7 @@ import { requirePermission, ok, fail } from '../auth/middleware.js';
 import { getAllSettings, setSetting, publicSettings } from '../services/settings.service.js';
 import { sendTestEmail, isSmtpConfigured } from '../services/email.service.js';
 import { dirs } from '../config.js';
+import { encryptField, decryptFieldIfEncrypted } from '../utils/crypto.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -45,7 +46,14 @@ export async function settingsRoutes(app: FastifyInstance) {
     const b = req.body as Record<string, unknown>;
     try {
       for (const [k, v] of Object.entries(b)) {
-        setSetting(k, String(v));
+        // SMTP 密码加密入库（读取时按需解密）
+        if (k === 'smtpPassword' && String(v)) {
+          const s = String(v);
+          // 若已是密文（管理页回显未修改时），避免二次加密
+          setSetting(k, decryptFieldIfEncrypted(s) === s ? encryptField(s) : s);
+        } else {
+          setSetting(k, String(v));
+        }
       }
       return ok(reply, { settings: getAllSettings() });
     } catch (e: any) {
@@ -63,6 +71,14 @@ export async function settingsRoutes(app: FastifyInstance) {
       if (!BG_MIME[mime] && !['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
         return fail(reply, 400, '仅支持 jpg/png/webp/gif 背景图');
       }
+      if (r.data.length > 10 * 1024 * 1024) return fail(reply, 400, '背景图不能超过 10MB');
+      const buf = r.data;
+      let valid = false;
+      if (ext === 'jpg' || ext === 'jpeg') valid = buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+      else if (ext === 'png') valid = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+      else if (ext === 'gif') valid = buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38;
+      else if (ext === 'webp') valid = buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && buf.toString('ascii', 8, 12) === 'WEBP';
+      if (!valid) return fail(reply, 400, '背景图格式不合法');
       const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
       fs.writeFileSync(path.join(dirs.backgrounds, name), r.data);
       const url = `/uploads/background/${name}`;
@@ -79,8 +95,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       if (!r) return fail(reply, 400, '缺少文件');
       const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
       const ext = BG_MIME[mime] || path.extname(r.filename).replace('.', '').toLowerCase() || 'png';
-      if (!BG_MIME[mime] && !['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'].includes(ext)) {
-        return fail(reply, 400, '仅支持 jpg/png/webp/gif/svg Logo');
+      if (!BG_MIME[mime] && !['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
+        return fail(reply, 400, '仅支持 jpg/png/webp/gif Logo');
       }
       // Logo 限制 2MB
       if (r.data.length > 2 * 1024 * 1024) {

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import crypto from 'node:crypto';
 import { authMiddleware, ok, fail } from '../auth/middleware.js';
 import { signJwt } from '../auth/jwt.js';
 import { jwtSecret } from '../config.js';
@@ -85,11 +86,20 @@ export async function authRoutes(app: FastifyInstance) {
       if (!verifyCode(twoFa.secret, parseInt(twoFactorCode, 10))) {
         // 检查恢复码
         const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
-        if (!codes.includes(twoFactorCode.toUpperCase())) {
+        const match = codes.some((c) => {
+          const a = Buffer.from(c);
+          const b = Buffer.from(twoFactorCode.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
+          return a.length === b.length && crypto.timingSafeEqual(a, b);
+        });
+        if (!match) {
           return fail(reply, 401, '验证码错误');
         }
-        // 使用恢复码
-        codes.splice(codes.indexOf(twoFactorCode.toUpperCase()), 1);
+        const idx = codes.findIndex((c) => {
+          const a = Buffer.from(c);
+          const b = Buffer.from(twoFactorCode.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
+          return a.length === b.length && crypto.timingSafeEqual(a, b);
+        });
+        codes.splice(idx, 1);
         db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
           .run(JSON.stringify(codes), u.id);
       }
@@ -105,7 +115,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   /** 2FA 登录第二步：验证 2FA 代码，颁发完整 token */
-  app.post('/auth/login/2fa', async (req, reply) => {
+  app.post('/auth/login/2fa', { config: { rateLimit: { max: 10, timeWindow: 60000 } } }, async (req, reply) => {
     const { tempToken, code } = (req.body || {}) as { tempToken?: string; code?: string };
     if (!tempToken || !code) return fail(reply, 400, '缺少参数');
 
@@ -136,8 +146,17 @@ export async function authRoutes(app: FastifyInstance) {
 
     // 检查恢复码
     const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
-    const idx = codes.indexOf(code.toUpperCase());
-    if (idx !== -1) {
+    const match = codes.some((c) => {
+      const a = Buffer.from(c);
+      const b = Buffer.from(code.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    });
+    if (match) {
+      const idx = codes.findIndex((c) => {
+        const a = Buffer.from(c);
+        const b = Buffer.from(code.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+      });
       codes.splice(idx, 1);
       db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
         .run(JSON.stringify(codes), payload.sub);
@@ -170,7 +189,7 @@ export async function authRoutes(app: FastifyInstance) {
     return ok(reply, { ...publicUser(u), avatar: profile.avatar || '', permissions: getUserPermissions(u.role) });
   });
 
-  app.post('/auth/register', async (req, reply) => {
+  app.post('/auth/register', { config: { rateLimit: { max: 5, timeWindow: 60000 } } }, async (req, reply) => {
     if (getSetting('registerEnabled') === 'false') return fail(reply, 403, '注册已关闭');
     const { username, password, displayName, email } = (req.body || {}) as {
       username?: string;

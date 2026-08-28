@@ -450,7 +450,7 @@ onMounted(async () => { await load(); });
         <el-table-column label="修改时间" width="160">
           <template #default="{ row }">{{ formatTime(row.mtime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="300">
+        <el-table-column label="操作" min-width="320">
           <template #default="{ row }">
             <div class="row-actions">
               <el-button v-if="row.isDir" link size="small" @click="openRename(row)">重命名</el-button>
@@ -528,7 +528,10 @@ onMounted(async () => { await load(); });
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="!browseLoading && !browseEntries.length" class="browse-empty">此文件夹为空</div>
+      <div v-if="!browseLoading && !browseEntries.length" class="browse-empty">
+        <el-icon :size="36"><FolderOpened /></el-icon>
+        <span>此文件夹为空</span>
+      </div>
     </template>
 
     <!-- 预览对话框 -->
@@ -682,7 +685,8 @@ onMounted(async () => { await load(); });
   flex-wrap: wrap;
 }
 .browse-crumbs { flex: 1; }
-.browse-empty { text-align: center; color: var(--text-secondary); padding: 40px; font-size: 13px; }
+.browse-empty { text-align: center; color: var(--text-secondary); padding: 48px; font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.browse-empty .el-icon { opacity: 0.5; }
 .fav-preview { min-height: 200px; display: flex; align-items: center; justify-content: center; }
 .pv-img { max-width: 100%; max-height: 70vh; object-fit: contain; }
 .pv-video { max-width: 100%; max-height: 70vh; }

@@ -23,6 +23,17 @@ function redactStorageConfig(config: Record<string, any>): Record<string, any> {
   return result;
 }
 
+/** Promise 超时兜底：防止 driver.usage() 挂起阻塞整个请求 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 export async function storageRoutes(app: FastifyInstance) {
   // 任何登录用户可列出存储（admin 看全部，普通用户仅看已启用的），供文件页/最近/快捷访问选择器使用
   app.get('/storages', { preHandler: authMiddleware }, async (req, reply) => {
@@ -33,49 +44,44 @@ export async function storageRoutes(app: FastifyInstance) {
       req.user!.role === 'admin'
         ? (db.prepare('SELECT * FROM storages ORDER BY sort, id').all() as any[])
         : (db.prepare('SELECT * FROM storages WHERE enabled = 1 ORDER BY sort, id').all() as any[]);
-    const out = [];
-    for (const r of rows) {
+
+    // 用量计算并行化 + 10 秒超时兜底（单个存储故障不拖垮整个列表）
+    // 统一归一为 { used, files } 结构，避免缓存行（{totalBytes,fileCount}）与新算结果字段混用
+    const usages = await Promise.all(rows.map(async (r): Promise<{ used: number; files: number } | null> => {
+      if (fast) return null;
+      // P2-6: 优先返回 5 分钟内的缓存；过期则重新计算并写回缓存
+      const cached = usageCache.get(r.id);
+      if (cached) return { used: cached.totalBytes, files: cached.fileCount };
+      try {
+        // P2-11 修复：解密配置后创建 driver
+        const driver = createDriver({ ...r, config: decryptStorageConfig(JSON.parse(r.config || '{}')) });
+        const usage = await withTimeout(driver.usage(), 10_000);
+        usageCache.set(r.id, usage.used, usage.files);
+        return { used: usage.used, files: usage.files };
+      } catch {
+        return null;
+      }
+    }));
+
+    const out: any[] = [];
+    rows.forEach((r, i) => {
       const rawConfig = JSON.parse(r.config || '{}');
       // P2-11 修复：admin 用户解密凭据，非 admin 用户脱敏
       const config = req.user!.role === 'admin'
         ? decryptStorageConfig(rawConfig)
         : redactStorageConfig(rawConfig);
-      const storage = {
+      const usage = usages[i];
+      out.push({
         id: r.id,
         name: r.name,
         type: r.type,
         enabled: !!r.enabled,
         sort: r.sort,
         config,
-        used: 0,
-        files: 0,
-      };
-      // 计算实际用量（fast 模式跳过）
-      if (!fast) {
-        try {
-          // P2-6: 优先返回 5 分钟内的缓存；过期则重新计算并写回缓存
-          const cached = usageCache.get(r.id);
-          if (cached) {
-            storage.used = cached.totalBytes;
-            storage.files = cached.fileCount;
-          } else {
-            // P2-11 修复：解密配置后创建 driver
-            const driver = createDriver({ ...r, config: decryptStorageConfig(JSON.parse(r.config || '{}')) });
-            const usage = await driver.usage();
-            usageCache.set(r.id, usage.used, usage.files);
-            storage.used = usage.used;
-            storage.files = usage.files;
-          }
-        } catch {
-          storage.used = 0;
-          storage.files = 0;
-        }
-      } else {
-        storage.used = 0;
-        storage.files = 0;
-      }
-      out.push(storage);
-    }
+        used: usage ? usage.used : 0,
+        files: usage ? usage.files : 0,
+      });
+    });
     return ok(reply, { storages: out, types: STORAGE_TYPES });
   });
 

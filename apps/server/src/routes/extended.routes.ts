@@ -222,7 +222,7 @@ export async function extendedRoutes(app: FastifyInstance) {
     return ok(reply, { ok: true });
   });
 
-  app.delete('/search-history', { preHandler: requirePermission('files:view') }, async (_req, reply) => {
+  app.delete('/search-history', { preHandler: requirePermission('files:view') }, async (req, reply) => {
     searchHistoryService.clear(req.user!.sub);
     return ok(reply, { ok: true });
   });
@@ -243,6 +243,8 @@ export async function extendedRoutes(app: FastifyInstance) {
       
       const filename = fileStream.filename || 'avatar.png';
       const ext = path.extname(filename) || '.png';
+      const allowedExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+      if (!allowedExts.has(ext.toLowerCase())) return fail(reply, 400, '仅支持 png/jpg/jpeg/webp');
       
       // 读取文件内容（流式）
       const data = await fileStream.toBuffer();
@@ -271,12 +273,20 @@ export async function extendedRoutes(app: FastifyInstance) {
   app.get('/avatar/:userId', async (req, reply) => {
     const userId = Number((req.params as { userId: string }).userId);
     const avatarDir = path.join(config.dataDir, 'avatars');
-    const files = fs.existsSync(avatarDir) ? fs.readdirSync(avatarDir) : [];
-    const file = files.find((f) => f.startsWith(`avatar_${userId}`));
-    if (!file) return fail(reply, 404, '头像不存在');
-    const filePath = path.join(avatarDir, file);
-    const data = fs.readFileSync(filePath);
-    reply.header('Content-Type', file.endsWith('.png') ? 'image/png' : 'image/jpeg');
-    return reply.send(data);
+    const candidates = [
+      { ext: '.png', mime: 'image/png' },
+      { ext: '.jpg', mime: 'image/jpeg' },
+      { ext: '.jpeg', mime: 'image/jpeg' },
+      { ext: '.webp', mime: 'image/webp' },
+    ];
+    for (const { ext, mime } of candidates) {
+      const filePath = path.join(avatarDir, `avatar_${userId}${ext}`);
+      if (fs.existsSync(filePath)) {
+        const data = fs.readFileSync(filePath);
+        reply.header('Content-Type', mime);
+        return reply.send(data);
+      }
+    }
+    return fail(reply, 404, '头像不存在');
   });
 }

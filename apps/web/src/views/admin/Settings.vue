@@ -305,8 +305,8 @@ async function load() {
     form.value.smtpPassword = s.smtpPassword || '';
     form.value.smtpFrom = s.smtpFrom || '';
     form.value.smtpFromName = s.smtpFromName || '';
-  } catch {
-    /* 使用默认值 */
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载设置失败，正在使用默认值');
   }
 }
 

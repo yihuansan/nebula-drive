@@ -15,7 +15,7 @@ export async function logRoutes(app: FastifyInstance) {
     return ok(reply, listOpLogs(page, size));
   });
 
-  app.delete('/logs', { preHandler: requirePermission('logs:view') }, async (req, reply) => {
+  app.delete('/logs', { preHandler: requirePermission('settings:manage') }, async (req, reply) => {
     clearLogs();
     return ok(reply, { ok: true });
   });

@@ -313,6 +313,7 @@ async function doTwoFaLogin() {
   border-radius: 50%;
   filter: blur(120px);
   opacity: 0.4;
+  animation: login-orb 16s ease-in-out infinite;
 }
 .login-page::before {
   top: -120px;
@@ -328,9 +329,15 @@ async function doTwoFaLogin() {
   height: 420px;
   background: color-mix(in srgb, var(--accent) 50%, #ffffff);
   opacity: 0.3;
+  animation-delay: -8s;
+}
+@keyframes login-orb {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(28px, -22px) scale(1.08); }
 }
 .login-card {
   width: 380px;
+  max-width: calc(100vw - 32px);
   background: var(--glass-bg);
   backdrop-filter: blur(var(--blur)) saturate(170%);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(170%);
@@ -340,6 +347,22 @@ async function doTwoFaLogin() {
   box-shadow: var(--shadow), inset 0 1px 0 var(--glass-highlight);
   position: relative;
   z-index: 1;
+  animation: login-in 0.5s var(--ease-smooth);
+}
+@keyframes login-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.login-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 3px;
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.7;
 }
 .brand {
   text-align: center;
@@ -365,6 +388,13 @@ async function doTwoFaLogin() {
 }
 .login-btn {
   width: 100%;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  box-shadow: 0 10px 26px var(--accent-soft);
+}
+.login-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px var(--accent-soft);
 }
 .captcha-row {
   display: flex;
@@ -462,5 +492,25 @@ async function doTwoFaLogin() {
   font-size: 15px;
   font-weight: 500;
   color: var(--text);
+}
+
+/* 窄屏（手机）自适应 */
+@media (max-width: 440px) {
+  .login-card {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 20px;
+    padding: 28px 20px;
+  }
+  .login-page {
+    padding: 16px 0;
+  }
+  .captcha-row {
+    flex-wrap: wrap;
+  }
+  .captcha-img {
+    width: 100%;
+    height: 44px;
+  }
 }
 </style>

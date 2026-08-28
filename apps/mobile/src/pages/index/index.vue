@@ -177,7 +177,11 @@ export default {
       this.onAction(e);
     },
     onDownload(e: any) {
-      const s = this.storages[this.storageIndex];
+      const s = this.storages?.[this.storageIndex];
+      if (!s) {
+        uni.showToast({ title: '请先初始化存储', icon: 'none' });
+        return;
+      }
       const url = downloadUrl(s.id, e.path);
       uni.showLoading({ title: '准备下载' });
       uni.downloadFile({
@@ -198,7 +202,11 @@ export default {
       });
     },
     onShare(e: any) {
-      const s = this.storages[this.storageIndex];
+      const s = this.storages?.[this.storageIndex];
+      if (!s) {
+        uni.showToast({ title: '请先初始化存储', icon: 'none' });
+        return;
+      }
       uni.showModal({
         title: '创建分享',
         content: `为 ${e.name} 创建分享链接？`,
@@ -216,7 +224,11 @@ export default {
       });
     },
     onRename(e: any) {
-      const s = this.storages[this.storageIndex];
+      const s = this.storages?.[this.storageIndex];
+      if (!s) {
+        uni.showToast({ title: '请先初始化存储', icon: 'none' });
+        return;
+      }
       uni.showModal({
         title: '重命名',
         placeholder: '新名称',
@@ -233,7 +245,11 @@ export default {
       });
     },
     onDelete(e: any) {
-      const s = this.storages[this.storageIndex];
+      const s = this.storages?.[this.storageIndex];
+      if (!s) {
+        uni.showToast({ title: '请先初始化存储', icon: 'none' });
+        return;
+      }
       uni.showModal({
         title: '确认删除',
         content: `删除 ${e.name}？`,
@@ -246,7 +262,11 @@ export default {
       });
     },
     onMkdir() {
-      const s = this.storages[this.storageIndex];
+      const s = this.storages?.[this.storageIndex];
+      if (!s) {
+        uni.showToast({ title: '请先初始化存储', icon: 'none' });
+        return;
+      }
       uni.showModal({
         title: '新建目录',
         placeholder: '目录名',

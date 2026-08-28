@@ -56,6 +56,18 @@ export function encryptStorageConfig(config: Record<string, any>): Record<string
   return result;
 }
 
+/** 若值处于加密格式（iv:enc:tag）则解密，否则原样返回（兼容历史明文数据） */
+export function decryptFieldIfEncrypted(value: string): string {
+  if (!value) return value;
+  const parts = value.split(':');
+  if (parts.length !== 3) return value;
+  try {
+    return decryptField(value);
+  } catch {
+    return value;
+  }
+}
+
 /** 解密存储配置中的敏感字段 */
 export function decryptStorageConfig(config: Record<string, any>): Record<string, any> {
   const sensitiveKeys = ['accessKeyId', 'secretAccessKey', 'password', 'token', 'username'];

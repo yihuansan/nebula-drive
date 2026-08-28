@@ -113,7 +113,11 @@ function fmtTime(ts: string) {
             </div>
             <el-tag v-if="sub.autoRefresh" type="success" size="small">自动刷新</el-tag>
           </div>
-          <div v-if="!loading && !subscriptions.length" class="empty">暂无订阅</div>
+          <div v-if="!loading && !subscriptions.length" class="empty">
+            <el-icon :size="36"><Share /></el-icon>
+            <h3>暂无订阅</h3>
+            <p>还没有订阅任何分享，转存分享后即可在此查看更新</p>
+          </div>
         </div>
       </el-tab-pane>
 
@@ -129,7 +133,11 @@ function fmtTime(ts: string) {
               </div>
             </div>
           </div>
-          <div v-if="!loading && !transferHistory.length" class="empty">暂无转存记录</div>
+          <div v-if="!loading && !transferHistory.length" class="empty">
+            <el-icon :size="36"><Download /></el-icon>
+            <h3>暂无转存记录</h3>
+            <p>使用"转存分享"功能后，记录会显示在这里</p>
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -187,7 +195,17 @@ function fmtTime(ts: string) {
   text-overflow: ellipsis;
 }
 .sub-meta, .transfer-meta { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-.empty { text-align: center; padding: 60px; color: var(--text-secondary); }
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 0;
+  color: var(--text-secondary);
+}
+.empty .el-icon { opacity: 0.5; }
+.empty h3 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); }
+.empty p { margin: 0; font-size: 13px; }
 .transfer-form { margin-top: 12px; }
 .form-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
 .form-tip { font-size: 13px; color: var(--text-secondary); }

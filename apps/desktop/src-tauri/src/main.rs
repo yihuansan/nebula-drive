@@ -150,7 +150,13 @@ fn append_diag_log(state_dir: &Path, line: &str) {
 
 /// 执行同步引擎 CLI 并返回 stdout。
 /// env: 需要以环境变量（而非 argv）传递给子进程的敏感值，如 NEBULA_PASSWORD / NEBULA_TOKEN。
-fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String)]) -> Result<String, String> {
+fn run_cli_with_timeout(
+    state_dir: &Path,
+    args: &[String],
+    json: bool,
+    env: &[(String, String)],
+    timeout_secs: u64,
+) -> Result<String, String> {
     let node = find_node()?;
     let cli = find_cli()?;
     append_diag_log(
@@ -186,9 +192,9 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String
     let stdout_task = std::thread::spawn(move || read_pipe_to_string(stdout));
     let stderr_task = std::thread::spawn(move || read_pipe_to_string(stderr));
 
-    // B2: 30s 超时 —— Server 无响应时不再让 UI 永久 loading。
+    // B2: 超时 —— Server 无响应时不再让 UI 永久 loading。
     // 用 try_wait 轮询实现（无需额外 crate）：到点仍未退出则判定超时。
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut status = None;
     loop {
         match child.try_wait() {
@@ -211,7 +217,10 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String
         let _ = child.wait();
         let _ = stdout_task.join();
         let _ = stderr_task.join();
-        return Err("同步引擎执行超时（30s）：服务器可能无响应，请稍后重试".into());
+        return Err(format!(
+            "同步引擎执行超时（{}s）：服务器可能无响应，请稍后重试",
+            timeout_secs
+        ));
     }
     let status = status.unwrap();
     let stdout = stdout_task.join().map_err(|_| "读取子进程输出失败".to_string())?;
@@ -237,6 +246,10 @@ fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String
         });
     }
     Ok(stdout)
+}
+
+fn run_cli(state_dir: &Path, args: &[String], json: bool, env: &[(String, String)]) -> Result<String, String> {
+    run_cli_with_timeout(state_dir, args, json, env, 30)
 }
 
 #[tauri::command]
@@ -335,13 +348,19 @@ fn status(app: tauri::AppHandle) -> Result<Value, String> {
 
 #[tauri::command]
 fn run_sync(app: tauri::AppHandle, pair_id: Option<String>) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let guard = state.watch.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Err("同步监听已在运行中，请先停止再手动同步".into());
+    }
+    drop(guard);
     let sd = state_dir(&app)?;
     let mut args: Vec<String> = vec!["sync".into()];
     if let Some(id) = pair_id {
         args.push("--pair".into());
         args.push(id);
     }
-    let out = run_cli(&sd, &args, false, &[])?;
+    let out = run_cli_with_timeout(&sd, &args, false, &[], 600)?;
     Ok(out.trim().to_string())
 }
 

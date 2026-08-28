@@ -514,7 +514,7 @@ onMounted(() => {
         <el-table-column label="回收站" width="110">
           <template #default="{ row }">{{ row.recycleBytes ? fmtSize(row.recycleBytes) : '-' }}</template>
         </el-table-column>
-        <el-table-column label="最近登录" width="200" prop="lastLoginAt" sortable>
+        <el-table-column label="最近登录" min-width="160" prop="lastLoginAt" sortable>
           <template #default="{ row }">
             <template v-if="row.lastLoginAt">
               <div>{{ fmtTime(row.lastLoginAt) }}</div>
@@ -523,7 +523,7 @@ onMounted(() => {
             <span v-else class="muted">从未登录</span>
           </template>
         </el-table-column>
-        <el-table-column label="注册时间" width="160" prop="createdAt" sortable>
+        <el-table-column label="注册时间" min-width="140" prop="createdAt" sortable>
           <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
         </el-table-column>
         <el-table-column label="操作" width="178" fixed="right" align="center">

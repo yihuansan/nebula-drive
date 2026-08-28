@@ -225,7 +225,7 @@ onMounted(load);
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260">
+        <el-table-column label="操作" min-width="260">
           <template #default="{ row }">
             <el-button link type="primary" size="small" :loading="testing === row.id" @click="doTest(row)">测试</el-button>
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>

@@ -52,7 +52,7 @@ export default {
     },
     copyUrl(s: any) {
       const base = (uni.getStorageSync('nebula_base') || '').replace(/\/+$/, '');
-      const url = `${base}/s/${s.token}`;
+      const url = `${base}/api/v1/s/${s.token}`;
       uni.setClipboard({
         data: url,
         success: () => uni.showToast({ title: '链接已复制', icon: 'success' }),

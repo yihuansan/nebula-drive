@@ -322,6 +322,36 @@ CREATE INDEX IF NOT EXISTS idx_quick_access_storage ON quick_access (storage_id)
       created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens (user_id);
+
+    -- 上传会话持久化（断点续传：服务重启后仍可恢复）
+    CREATE TABLE IF NOT EXISTS upload_sessions (
+      upload_id   TEXT PRIMARY KEY,
+      user_id     INTEGER NOT NULL,
+      storage_id  INTEGER NOT NULL,
+      dest_path   TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      size        INTEGER NOT NULL,
+      chunk_size  INTEGER NOT NULL,
+      received    INTEGER NOT NULL DEFAULT 0,
+      status      TEXT NOT NULL DEFAULT 'uploading',
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_user ON upload_sessions (user_id);
+
+    -- 视频转码任务
+    CREATE TABLE IF NOT EXISTS transcode_tasks (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      INTEGER NOT NULL,
+      storage_id   INTEGER NOT NULL,
+      src_path     TEXT NOT NULL,
+      dest_path    TEXT NOT NULL,
+      status       TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','error')),
+      progress     INTEGER NOT NULL DEFAULT 0,
+      error        TEXT DEFAULT '',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_transcode_tasks_user ON transcode_tasks (user_id);
   `);
 
   // P1-9 迁移：为 hidden_space_settings 添加 salt 列

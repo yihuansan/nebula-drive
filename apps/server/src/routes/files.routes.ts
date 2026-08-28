@@ -6,10 +6,17 @@ import { fileService } from '../services/file.service.js';
 import { getStorageRecord, issueDownloadTicket, consumeDownloadTicket } from '../services/file.service.js';
 import { fileIndex } from '../services/fileIndex.service.js';
 import { getDriver } from '../storage/registry.js';
+import { LocalDriver } from '../storage/local.js';
+import { getPoster, isVideoExt } from '../services/poster.service.js';
+import { isFaststart, needsFaststartExt, ensureFaststartAsync } from '../services/videoProcess.service.js';
 import { getDb } from '../db/index.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+// archiver 为 CJS 模块，Node ESM 下无 default 导出，用 createRequire 加载
+import { createRequire } from 'node:module';
+const requireCjs = createRequire(import.meta.url);
+const archiver = requireCjs('archiver') as typeof import('archiver');
 
 /** 预览专用认证：兼容 Bearer 头与 ?token=（<video> 流无法带自定义请求头） */
 async function previewAuth(req: FastifyRequest, reply: FastifyReply) {
@@ -31,6 +38,25 @@ function safeStoragePath(rel: string): string | null {
   const full = path.resolve(root, rel.replace(/^\//, ''));
   if (full !== root && !full.startsWith(root + path.sep)) return null;
   return full;
+}
+
+/** 打包/解压安全上限：防止 zip bomb 与 OOM */
+const MAX_ZIP_FILES = 2000;
+const MAX_ZIP_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+
+/** 递归统计选中项的文件数与总大小（仅 stat，不读内容；异步 API 避免阻塞事件循环） */
+async function collectFileBudget(items: { full: string; base: string }[], budget: { files: number; bytes: number }): Promise<void> {
+  const walk = async (full: string): Promise<void> => {
+    const st = await fs.promises.stat(full);
+    if (st.isDirectory()) {
+      const names = await fs.promises.readdir(full);
+      for (const name of names) await walk(path.join(full, name));
+    } else {
+      budget.files += 1;
+      budget.bytes += st.size;
+    }
+  };
+  for (const it of items) await walk(it.full);
 }
 
 export async function fileRoutes(app: FastifyInstance) {
@@ -107,6 +133,28 @@ export async function fileRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/files/batch-move', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const { storageId, paths, destPath } = req.body as { storageId: number; paths: string[]; destPath: string };
+    if (!paths?.length) return fail(reply, 400, '缺少文件列表');
+    try {
+      await fileService.batchMove(storageId, paths, destPath, { username: req.user!.username, id: req.user!.sub });
+      return ok(reply, { ok: true });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '批量移动失败');
+    }
+  });
+
+  app.post('/files/batch-copy', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const { storageId, paths, destPath } = req.body as { storageId: number; paths: string[]; destPath: string };
+    if (!paths?.length) return fail(reply, 400, '缺少文件列表');
+    try {
+      await fileService.batchCopy(storageId, paths, destPath, { username: req.user!.username, id: req.user!.sub });
+      return ok(reply, { ok: true });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '批量复制失败');
+    }
+  });
+
   /** 签发一次性下载票据（需登录）：大文件走浏览器原生下载，不再 JS 整包缓冲 */
   app.post('/files/download-ticket', { preHandler: requirePermission('files:download') }, async (req, reply) => {
     const { storageId, path } = req.body as { storageId: number; path: string };
@@ -160,10 +208,31 @@ export async function fileRoutes(app: FastifyInstance) {
         // 记录失败不影响下载
       }
       
-      const stream = await driver.download(p);
+      // 解析 Range 头：支持断点续传 / 多线程下载工具
+      const total = st.size;
+      const rangeHdr = (req.headers.range as string | undefined) || '';
+      let range: { start: number; end: number } | undefined;
+      if (rangeHdr.startsWith('bytes=')) {
+        const m = rangeHdr.match(/bytes=(\d*)-(\d*)/);
+        if (m) {
+          const start = m[1] ? parseInt(m[1], 10) : 0;
+          const end = m[2] ? parseInt(m[2], 10) : total - 1;
+          const s = Math.max(0, Math.min(start, total - 1));
+          const e = Math.max(s, Math.min(end, total - 1));
+          if (s <= e) range = { start: s, end: e };
+        }
+      }
+      const stream = await driver.download(p, range);
       const name = p.split('/').filter(Boolean).pop() || 'download';
       reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
-      reply.header('Content-Length', st.size);
+      reply.header('Accept-Ranges', 'bytes');
+      if (range) {
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${range.start}-${range.end}/${total}`);
+        reply.header('Content-Length', range.end - range.start + 1);
+      } else {
+        reply.header('Content-Length', total);
+      }
       return reply.send(stream);
     } catch (e: any) {
       return fail(reply, 404, e?.message || '下载失败');
@@ -178,7 +247,7 @@ export async function fileRoutes(app: FastifyInstance) {
       const rec = getStorageRecord(storageId);
       if (!rec) return fail(reply, 404, '存储不存在');
       const driver = getDriver(rec);
-      const st = await driver.stat(p);
+      let st = await driver.stat(p);
       if (!st || st.isDir) return fail(reply, 404, '文件不存在');
       
       // 记录访问历史
@@ -196,12 +265,25 @@ export async function fileRoutes(app: FastifyInstance) {
         // 记录失败不影响预览
       }
       
-      const total = st.size;
-      // 解析 Range 头：本地存储支持范围读取，用于视频在线播放拖动
+      // 本地存储标记（Range 读取 + faststart 兜底都需要）
       const isLocal = rec.type === 'local';
+      // 自动 faststart 兜底：本地 MP4/M4V 若 non-faststart，不阻塞当前请求——
+      // 先返回原始文件让用户播放，响应完成后再后台异步转换（moov 前置），
+      // 下次请求即可直接使用 faststart 版本（边下边播）。
+      if (isLocal && needsFaststartExt(p)) {
+        const localDriver = driver as unknown as LocalDriver;
+        const fullPath = localDriver.resolveFull(p);
+        if (!(await isFaststart(fullPath))) {
+          reply.raw.on('close', () => {
+            ensureFaststartAsync(fullPath);
+          });
+        }
+      }
+      const total = st.size;
+      // 解析 Range 头：各存储驱动均支持范围读取，用于视频在线播放拖动
       const rangeHdr = (req.headers.range as string | undefined) || '';
       let range: { start: number; end: number } | undefined;
-      if (isLocal && rangeHdr.startsWith('bytes=')) {
+      if (rangeHdr.startsWith('bytes=')) {
         const m = rangeHdr.match(/bytes=(\d*)-(\d*)/);
         if (m) {
           const start = m[1] ? parseInt(m[1], 10) : 0;
@@ -212,6 +294,27 @@ export async function fileRoutes(app: FastifyInstance) {
         }
       }
       const stream = await driver.download(p, range);
+      // 诊断日志：追踪流的生命周期 + 实际发送字节数
+      const streamLabel = `[preview:${p.split('/').pop()}]`;
+      const t0 = Date.now();
+      let bytesSent = 0;
+      stream.on('open', (fd: any) => {
+        console.log(`${streamLabel} OPEN fd=${fd} range=${range ? `${range.start}-${range.end}` : 'full'} total=${total} t=0ms`);
+      });
+      stream.on('data', (chunk: Buffer) => {
+        bytesSent += chunk.length;
+      });
+      stream.on('close', () => {
+        console.log(`${streamLabel} CLOSED bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
+      });
+      stream.on('error', (err: Error) => {
+        console.log(`${streamLabel} STREAM_ERROR: ${err.message} bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
+      });
+      reply.raw.on('close', () => {
+        console.log(`${streamLabel} RAW_CLOSED bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
+      });
+      // 记录请求头（诊断用）
+      console.log(`${streamLabel} REQUEST headers=${JSON.stringify({ range: req.headers.range, ua: (req.headers['user-agent'] || '').slice(0, 80), accept: req.headers.accept })}`);
       // 根据文件扩展名设置正确的 Content-Type
       const ext = p.split('.').pop()?.toLowerCase() || '';
       const MIME_MAP: Record<string, string> = {
@@ -231,7 +334,7 @@ export async function fileRoutes(app: FastifyInstance) {
         html: 'text/html', css: 'text/css', js: 'text/javascript',
         json: 'application/json', csv: 'text/csv',
         // 代码
-        ts: 'text/typescript', py: 'text/x-python', java: 'text/x-java',
+        py: 'text/x-python', java: 'text/x-java',
         c: 'text/x-c', cpp: 'text/x-c++', h: 'text/x-chdr',
         sh: 'text/x-shell', go: 'text/x-go', rs: 'text/x-rust', vue: 'text/vue',
       };
@@ -242,7 +345,7 @@ export async function fileRoutes(app: FastifyInstance) {
       reply.header('Accept-Ranges', 'bytes');
       if (range) {
         reply.code(206);
-        reply.header('Content-Range', `bytes ${range.start}-${range.end} ${total}`);
+        reply.header('Content-Range', `bytes ${range.start}-${range.end}/${total}`);
         reply.header('Content-Length', range.end - range.start + 1);
       } else {
         reply.header('Content-Length', total);
@@ -250,6 +353,33 @@ export async function fileRoutes(app: FastifyInstance) {
       return reply.send(stream);
     } catch (e: any) {
       return fail(reply, 404, e?.message || '预览失败');
+    }
+  });
+
+  /** 服务端海报：ffmpeg seek 抽帧生成 JPEG（绕过浏览器捕获，对非 faststart/大文件可靠）。?storageId&path，可选 ?t 指定 seek 秒数 */
+  app.get('/files/poster', { preHandler: async (req, reply) => { await previewAuth(req, reply); if (!reply.sent) await requirePermission('files:view')(req, reply); } }, async (req, reply) => {
+    const q = req.query as { storageId?: string; path?: string; t?: string };
+    const storageId = Number(q.storageId);
+    const p = q.path || '';
+    try {
+      const rec = getStorageRecord(storageId);
+      if (!rec) return fail(reply, 404, '存储不存在');
+      if (rec.type !== 'local') return fail(reply, 400, '仅本地存储支持服务端海报');
+      const driver = getDriver(rec);
+      const st = await driver.stat(p);
+      if (!st || st.isDir) return fail(reply, 404, '文件不存在');
+      const name = p.split('/').filter(Boolean).pop() || '';
+      if (!isVideoExt(name)) return fail(reply, 400, '非视频文件');
+      const local = driver as unknown as LocalDriver;
+      const fullPath = local.resolveFull(p);
+      const t = q.t ? Number(q.t) : undefined;
+      const buf = await getPoster(storageId, p, fullPath, st.mtime, st.size, Number.isFinite(t) ? t : undefined);
+      if (!buf) return fail(reply, 503, '海报生成失败（ffmpeg 不可用或抽帧出错）');
+      reply.header('Content-Type', 'image/jpeg');
+      reply.header('Cache-Control', 'public, max-age=86400');
+      return reply.send(buf);
+    } catch (e: any) {
+      return fail(reply, 404, e?.message || '海报生成失败');
     }
   });
 
@@ -273,7 +403,7 @@ export async function fileRoutes(app: FastifyInstance) {
     }
   });
 
-  // ===== 批量下载（打包 zip）=====
+  // ===== 批量下载（打包 zip，流式输出）=====
   app.post('/files/batch-download', { preHandler: requirePermission('files:download') }, async (req, reply) => {
     const b = req.body as { storageId?: number; paths?: string[] };
     if (!b.paths?.length) return fail(reply, 400, '缺少文件列表');
@@ -281,40 +411,38 @@ export async function fileRoutes(app: FastifyInstance) {
     const rec = getStorageRecord(storageId);
     if (!rec) return fail(reply, 404, '存储不存在');
 
-    const zip = new AdmZip();
-    /** 递归添加目录内容到 zip */
-    function addDirRecursive(dirPath: string, zipFolder: string) {
-      const items = fs.readdirSync(dirPath);
-      for (const item of items) {
-        const itemPath = path.join(dirPath, item);
-        const stat = fs.statSync(itemPath);
-        if (stat.isDirectory()) {
-          addDirRecursive(itemPath, zipFolder ? `${zipFolder}/${item}` : item);
-        } else {
-          const zipEntryPath = zipFolder ? `${zipFolder}/${item}` : item;
-          zip.addLocalFile(itemPath, undefined, zipEntryPath);
-        }
-      }
-    }
+    const items: { full: string; base: string }[] = [];
+    const budget = { files: 0, bytes: 0 };
     for (const p of b.paths) {
       const fullPath = safeStoragePath(p);
-      if (!fullPath) continue; // 路径穿越尝试：跳过
-      if (!fs.existsSync(fullPath)) continue;
-      const stat = fs.statSync(fullPath);
-      const zipBase = p.replace(/^\//, '').split('/').pop() || p;
-      if (stat.isDirectory()) {
-        // 文件夹：递归打包，以文件夹名为根
-        addDirRecursive(fullPath, zipBase);
-      } else {
-        // 文件：直接添加
-        zip.addLocalFile(fullPath, undefined, zipBase);
-      }
+      if (!fullPath || !fs.existsSync(fullPath)) continue; // 路径穿越/不存在：跳过
+      items.push({ full: fullPath, base: p.replace(/^\//, '').split('/').pop() || p });
     }
-    const buffer = zip.toBuffer();
-    reply.header('Content-Type', 'application/zip');
-    reply.header('Content-Disposition', 'attachment; filename="batch-download.zip"');
-    reply.header('Content-Length', buffer.length);
-    return reply.send(buffer);
+    if (!items.length) return fail(reply, 404, '文件不存在');
+    // 预校验：文件数与总大小上限，防止 OOM
+    await collectFileBudget(items, budget);
+    if (budget.files > MAX_ZIP_FILES) return fail(reply, 400, `文件数超过上限（最多 ${MAX_ZIP_FILES} 个）`);
+    if (budget.bytes > MAX_ZIP_BYTES) return fail(reply, 400, '文件总大小超过上限（最多 2GB）');
+
+    // 流式打包：archiver → reply.raw（不整包驻留内存）
+    const raw = reply.raw;
+    const zip = archiver({ stream: true, zlib: { level: 6 } });
+    zip.on('error', (err) => {
+      if (!raw.headersSent) raw.writeHead(500, { 'Content-Type': 'application/json' });
+      raw.end(`{"error":"${(err as Error).message}"}`);
+    });
+    raw.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': 'attachment; filename="batch-download.zip"',
+    });
+    zip.pipe(raw);
+    for (const it of items) {
+      const st = fs.statSync(it.full);
+      if (st.isDirectory()) zip.dir(it.full, it.base);
+      else zip.file(it.full, { name: it.base });
+    }
+    await zip.finalize();
+    return;
   });
 
   // ===== 压缩：将选中文件/文件夹打包为 zip 保存到服务器 =====
@@ -334,34 +462,41 @@ export async function fileRoutes(app: FastifyInstance) {
     if (!destDir) return fail(reply, 400, '非法目标路径');
     const zipPath = path.join(destDir, zipName);
 
-    const zip = new AdmZip();
-    function addDirRecursive(dirPath: string, zipFolder: string) {
-      const items = fs.readdirSync(dirPath);
-      for (const item of items) {
-        const itemPath = path.join(dirPath, item);
-        const stat = fs.statSync(itemPath);
-        if (stat.isDirectory()) {
-          addDirRecursive(itemPath, zipFolder ? `${zipFolder}/${item}` : item);
-        } else {
-          const zipEntryPath = zipFolder ? `${zipFolder}/${item}` : item;
-          zip.addLocalFile(itemPath, undefined, zipEntryPath);
-        }
-      }
-    }
+    const items: { full: string; base: string }[] = [];
+    const budget = { files: 0, bytes: 0 };
     for (const p of b.paths) {
       const fullPath = safeStoragePath(p);
-      if (!fullPath) continue; // 路径穿越尝试：跳过
-      if (!fs.existsSync(fullPath)) continue;
-      const stat = fs.statSync(fullPath);
-      const zipBase = p.replace(/^\//, '').split('/').pop() || p;
-      if (stat.isDirectory()) {
-        addDirRecursive(fullPath, zipBase);
-      } else {
-        zip.addLocalFile(fullPath, undefined, zipBase);
-      }
+      if (!fullPath || !fs.existsSync(fullPath)) continue; // 路径穿越/不存在：跳过
+      items.push({ full: fullPath, base: p.replace(/^\//, '').split('/').pop() || p });
     }
-    // 写入 zip 文件
-    fs.writeFileSync(zipPath, zip.toBuffer());
+    if (!items.length) return fail(reply, 404, '文件不存在');
+    await collectFileBudget(items, budget);
+    if (budget.files > MAX_ZIP_FILES) return fail(reply, 400, `文件数超过上限（最多 ${MAX_ZIP_FILES} 个）`);
+    if (budget.bytes > MAX_ZIP_BYTES) return fail(reply, 400, '文件总大小超过上限（最多 2GB）');
+
+    // 流式写入 tmp 文件，完成后原子 rename（避免半成品 zip）
+    const tmpPath = zipPath + '.tmp';
+    const out = fs.createWriteStream(tmpPath);
+    const zip = archiver({ stream: true, zlib: { level: 6 } });
+    zip.pipe(out);
+    for (const it of items) {
+      const st = fs.statSync(it.full);
+      if (st.isDirectory()) zip.dir(it.full, it.base);
+      else zip.file(it.full, { name: it.base });
+    }
+    const done = new Promise<void>((resolve, reject) => {
+      out.on('close', () => resolve());
+      out.on('error', (e) => reject(e));
+      zip.on('error', (e) => reject(e as Error));
+    });
+    zip.finalize();
+    try {
+      await done;
+      fs.renameSync(tmpPath, zipPath);
+    } catch (e: any) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* ignore */ }
+      return fail(reply, 500, e?.message || '压缩失败');
+    }
     // P2-5/P2-6: 直接写盘到 storageRoot → 使对应 local 存储的索引与用量缓存失效
     fileIndex.invalidateForRoot(dirs.storageRoot);
     return ok(reply, { path: `/${zipName}`, name: zipName });
@@ -393,6 +528,10 @@ export async function fileRoutes(app: FastifyInstance) {
     try {
       const zip = new AdmZip(zipFullPath); // 读取 zip 文件
       const entries = zip.getEntries();
+      // 防 zip bomb：条目数与解压总大小上限
+      if (entries.length > MAX_ZIP_FILES) return fail(reply, 400, `zip 条目数超过上限（最多 ${MAX_ZIP_FILES}）`);
+      const totalUncompressed = entries.reduce((s: number, e: any) => s + (e.isDirectory ? 0 : (e as any).size), 0);
+      if (totalUncompressed > MAX_ZIP_BYTES) return fail(reply, 400, '解压后总大小超过上限（最多 2GB）');
       // P0-4 修复：逐条校验 zip 条目路径，防止 zip-slip 任意文件写
       let extracted = 0;
       for (const entry of entries) {
@@ -467,14 +606,24 @@ export async function fileRoutes(app: FastifyInstance) {
     if (!fs.existsSync(fullPath)) return fail(reply, 404, '文件不存在');
 
     const ext = path.extname(fullPath).replace('.', '').toLowerCase();
+    // 列出压缩包需整包读入内存（AdmZip），限制 100MB 防止 OOM（2GB 上限仅适用于流式打包/解压）
+    const MAX_ARCHIVE_LIST_BYTES = 100 * 1024 * 1024;
+    const stZip = fs.statSync(fullPath);
+    if (stZip.size > MAX_ARCHIVE_LIST_BYTES) {
+      return fail(reply, 400, `压缩包过大，不支持在线列表（最大 ${MAX_ARCHIVE_LIST_BYTES / 1024 / 1024}MB）`);
+    }
     const entries: any[] = [];
     try {
       if (ext === 'zip') {
         const zip = new AdmZip(fs.readFileSync(fullPath));
-        for (const entry of zip.getEntries()) {
+        const all = zip.getEntries();
+        if (all.length > MAX_ZIP_FILES) {
+          return fail(reply, 400, `zip 条目数超过上限（最多 ${MAX_ZIP_FILES} 个）`);
+        }
+        for (const entry of all) {
           entries.push({
             name: entry.entryName,
-            size: entry.isDirectory ? 0 : entry.size,
+            size: entry.isDirectory ? 0 : (entry as any).size,
             isDir: entry.isDirectory,
           });
         }

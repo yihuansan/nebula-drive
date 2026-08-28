@@ -6,8 +6,9 @@ import crypto from 'node:crypto';
 import { execSync, spawn } from 'node:child_process';
 
 // 获取 GitHub Token（优先环境变量，其次 data/.github-token 文件）
+// 返回已验证的非空 token，否则返回空串（调用方通过 `if (token)` 判断是否加 Authorization 头）
 function getGithubToken(): string {
-  const envToken = process.env.GITHUB_TOKEN;
+  const envToken = (process.env.GITHUB_TOKEN || '').trim();
   if (envToken) return envToken;
   try {
     const tokenFile = path.join(process.cwd(), 'data', '.github-token');
@@ -88,7 +89,7 @@ export async function updateRoutes(app: FastifyInstance) {
         return fail(reply, 500, '无法连接 GitHub，请检查网络');
       }
       
-      const latest = await res.json();
+      const latest = (await res.json()) as Record<string, any>;
       
       // 获取当前版本（从 package.json 读取）
       const currentVersion = getCurrentVersion();
@@ -119,7 +120,7 @@ export async function updateRoutes(app: FastifyInstance) {
    * 执行在线更新
    * POST /api/v1/system/perform-update
    */
-  app.post('/system/perform-update', { preHandler: requirePermission('settings:view') }, async (_req, reply) => {
+  app.post('/system/perform-update', { preHandler: requirePermission('settings:manage') }, async (_req, reply) => {
     const log = (msg: string) => {
       const line = `[UPDATE ${new Date().toISOString()}] ${msg}`;
       console.log(line);
@@ -131,17 +132,18 @@ export async function updateRoutes(app: FastifyInstance) {
 
       // 1. 获取最新 release 信息
       log('1. 获取最新版本信息...');
-      const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', {
-        headers: {
-          'User-Agent': 'NebulaDrive',
-          'Accept': 'application/vnd.github.v3+json',
-        },
-      });
+      const token = getGithubToken();
+      const headers: Record<string, string> = {
+        'User-Agent': 'NebulaDrive',
+        'Accept': 'application/vnd.github.v3+json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch('https://api.github.com/repos/yihuansan/nebula-drive/releases/latest', { headers });
       if (!res.ok) {
         log(`ERROR: GitHub API 返回 ${res.status}`);
         return fail(reply, 500, '无法获取最新版本信息');
       }
-      const latest = await res.json();
+      const latest = (await res.json()) as Record<string, any>;
       log(`最新版本: ${latest.tag_name}`);
 
       // 2. 下载版本包
@@ -188,10 +190,14 @@ export async function updateRoutes(app: FastifyInstance) {
             return fail(reply, 500, 'SHA256 校验失败，下载包可能被篡改');
           }
         } else {
-          log(`WARN: 无法获取 SHA256 文件 (${shaRes.status})，跳过校验`);
+          log(`ERROR: 无法获取 SHA256 文件 (${shaRes.status})`);
+          fs.rmSync(zipPath, { force: true });
+          return fail(reply, 500, '无法验证版本包完整性，安装已中止');
         }
       } catch (e: any) {
-        log(`WARN: SHA256 校验异常: ${e.message}，跳过校验`);
+        log(`ERROR: SHA256 校验异常: ${e.message}`);
+        fs.rmSync(zipPath, { force: true });
+        return fail(reply, 500, '无法验证版本包完整性，安装已中止');
       }
 
       // 3. 解压
@@ -395,7 +401,7 @@ log('=== 重启脚本完成 ===');
         return fail(reply, 500, '无法获取更新日志');
       }
       
-      const releases = await res.json();
+      const releases = (await res.json()) as any[];
       return ok(reply, {
         releases: releases.map((r: any) => ({
           version: r.tag_name?.replace(/^v/, '') || 'unknown',

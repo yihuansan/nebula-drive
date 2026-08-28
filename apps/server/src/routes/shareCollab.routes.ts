@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import path from 'node:path';
 import { requirePermission, authMiddleware, ok, fail } from '../auth/middleware.js';
 import { shareCollabService } from '../services/shareCollab.service.js';
 
@@ -100,6 +101,9 @@ export async function shareCollabRoutes(app: FastifyInstance) {
   /** 获取共享的接收者 */
   app.get('/share-collab/:id/recipients', { preHandler: requirePermission('files:share') }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
+    const s = shareCollabService.byId(id);
+    if (!s) return fail(reply, 404, '共享不存在');
+    if (s.created_by !== req.user!.sub && !shareCollabService.hasPermission(id, req.user!.sub)) return fail(reply, 403, '无权操作');
     const recipients = shareCollabService.getRecipients(id);
     return ok(reply, { recipients });
   });
@@ -150,6 +154,9 @@ export async function shareCollabRoutes(app: FastifyInstance) {
   /** 获取共享活动记录 */
   app.get('/share-collab/:id/activity', { preHandler: requirePermission('files:share') }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
+    const s = shareCollabService.byId(id);
+    if (!s) return fail(reply, 404, '共享不存在');
+    if (s.created_by !== req.user!.sub && !shareCollabService.hasPermission(id, req.user!.sub)) return fail(reply, 403, '无权操作');
     const activity = shareCollabService.getActivity(id);
     return ok(reply, { activity });
   });
@@ -196,7 +203,14 @@ export async function shareCollabRoutes(app: FastifyInstance) {
     const basePath = item.path;
     const reqPath = q.path || '/';
 
-    // 计算实际路径
+    if (reqPath.includes('../') || reqPath.includes('..\\')) {
+      return fail(reply, 400, '非法路径');
+    }
+    const reqSegments = reqPath.split('/').filter(Boolean);
+    if (reqSegments.includes('..')) {
+      return fail(reply, 400, '非法路径');
+    }
+
     let realPath: string;
     if (item.is_dir) {
       if (reqPath === '/' || reqPath === basePath) {
@@ -208,9 +222,15 @@ export async function shareCollabRoutes(app: FastifyInstance) {
       realPath = basePath;
     }
 
+    const normalizedBase = path.normalize(basePath);
+    const normalizedReal = path.normalize(realPath);
+    const baseWithSlash = normalizedBase.endsWith('/') ? normalizedBase : normalizedBase + '/';
+    if (normalizedReal !== normalizedBase && !normalizedReal.startsWith(baseWithSlash)) {
+      return fail(reply, 400, '非法路径');
+    }
+
     try {
       const entries = await driver.list(realPath);
-      // 记录活动
       shareCollabService.recordActivity(id, req.user!.sub, 'view', reqPath);
       return ok(reply, { entries, basePath, permission: perm });
     } catch (e: any) {
@@ -235,17 +255,31 @@ export async function shareCollabRoutes(app: FastifyInstance) {
     const driver = getDriver(storage);
 
     let realPath: string;
+    const basePath = item.path;
     if (item.is_dir) {
       const reqPath = q.path || '/';
+      if (reqPath.includes('../') || reqPath.includes('..\\')) {
+        return fail(reply, 400, '非法路径');
+      }
+      const reqSegments = reqPath.split('/').filter(Boolean);
+      if (reqSegments.includes('..')) {
+        return fail(reply, 400, '非法路径');
+      }
       realPath = reqPath === '/' ? item.path : item.path + (reqPath.startsWith('/') ? reqPath : '/' + reqPath);
     } else {
       realPath = item.path;
     }
 
+    const normalizedBase = path.normalize(basePath);
+    const normalizedReal = path.normalize(realPath);
+    const baseWithSlash = normalizedBase.endsWith('/') ? normalizedBase : normalizedBase + '/';
+    if (normalizedReal !== normalizedBase && !normalizedReal.startsWith(baseWithSlash)) {
+      return fail(reply, 400, '非法路径');
+    }
+
     try {
       const stream = await driver.download(realPath);
       const name = realPath.split('/').filter(Boolean).pop() || 'download';
-      // 记录活动
       shareCollabService.recordActivity(id, req.user!.sub, 'download', q.path);
       reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
       return reply.send(stream);

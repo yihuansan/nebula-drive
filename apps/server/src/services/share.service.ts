@@ -160,6 +160,7 @@ export const shareService = {
   async publicList(token: string, path: string) {
     const s = this.byToken(token);
     if (!s || !s.enabled) throw new Error('分享不存在');
+    if (s.expires_at && new Date(s.expires_at + 'Z') < new Date()) throw new Error('分享已过期');
     const driver = getDriver(getDb().prepare('SELECT * FROM storages WHERE id = ?').get(s.storage_id) as any);
     const real = await this.resolvePublicPath(s, driver, path, true);
     const entries = await driver.list(real);

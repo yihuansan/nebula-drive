@@ -42,6 +42,7 @@ export const recycleService = {
     if (!rec) throw new Error('存储不存在');
     const driver = getDriver(rec);
     const stat = await driver.stat(filePath);
+    if (!stat) throw new Error('文件不存在');
     const name = filePath.split('/').filter(Boolean).pop() || '未知';
     let localCopy: string | null = null;
 
@@ -81,6 +82,7 @@ export const recycleService = {
       // P0-2 修复：校验 DB 中记录的 path 在存储根目录内，防止任意文件写回
       const real = safeRelPath(row.path, root);
       if (!real) throw new Error('非法路径：恢复目标不在存储范围内');
+      if (fs.existsSync(real)) throw new Error('恢复目标位置已存在同名文件，请先处理或删除');
       fs.mkdirSync(path.dirname(real), { recursive: true });
       fs.renameSync(row.local_copy, real);
       invalidateCaches(row.storage_id);

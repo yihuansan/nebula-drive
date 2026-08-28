@@ -33,13 +33,18 @@ interface DocEntry {
   size: number;
   mtime: number;
 }
+interface MediaEntry extends DocEntry {
+  ext: string;
+}
 
 const storages = ref<StorageInfo[]>([]);
 const storageId = ref<number | null>(null);
 const videos = ref<MediaItem[]>([]);
 const docs = ref<DocEntry[]>([]);
+const images = ref<MediaEntry[]>([]);
+const audios = ref<MediaEntry[]>([]);
 const loading = ref(false);
-const mode = ref<'video' | 'document'>('video');
+const mode = ref<'video' | 'document' | 'image' | 'audio'>('video');
 
 const filterCategory = ref('');
 const searchQuery = ref('');
@@ -71,9 +76,11 @@ async function loadMedia() {
   if (storageId.value === null) return;
   loading.value = true;
   try {
-    const [vRes, dRes] = await Promise.all([
+    const [vRes, dRes, iRes, aRes] = await Promise.all([
       api<any>(`/files/by-type?storageId=${storageId.value}&type=video`),
       api<any>(`/files/by-type?storageId=${storageId.value}&type=document`),
+      api<any>(`/files/by-type?storageId=${storageId.value}&type=image`),
+      api<any>(`/files/by-type?storageId=${storageId.value}&type=audio`),
     ]);
     const sid = storageId.value;
     videos.value = (vRes.entries || [])
@@ -95,11 +102,63 @@ async function loadMedia() {
     docs.value = (dRes.entries || [])
       .filter((e: any) => !e.isDir)
       .map((e: any) => ({ path: e.path, name: e.name, size: e.size, mtime: e.mtime }));
+    images.value = (iRes.entries || [])
+      .filter((e: any) => !e.isDir)
+      .map((e: any) => ({ path: e.path, name: e.name, size: e.size, mtime: e.mtime, ext: extOf(e.name) }));
+    audios.value = (aRes.entries || [])
+      .filter((e: any) => !e.isDir)
+      .map((e: any) => ({ path: e.path, name: e.name, size: e.size, mtime: e.mtime, ext: extOf(e.name) }));
     startPosterCapture();
   } finally {
     loading.value = false;
   }
 }
+
+/* ---------------- 图片库 ---------------- */
+
+function thumbUrl(e: MediaEntry, size = 400): string {
+  return `/api/v1/files/thumbnail?storageId=${storageId.value}&path=${encodeURIComponent(e.path)}&size=${size}`;
+}
+const bigPreview = ref<MediaEntry | null>(null);
+function openImagePreview(e: MediaEntry) {
+  bigPreview.value = e;
+}
+
+/* ---------------- 音频库 ---------------- */
+
+const audioPlaying = ref<MediaEntry | null>(null);
+function playAudio(e: MediaEntry) {
+  audioPlaying.value = e;
+}
+function closeAudio() {
+  audioPlaying.value = null;
+}
+
+const filteredImages = computed(() => {
+  let list = images.value;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) list = list.filter((e) => e.name.toLowerCase().includes(q));
+  return [...list].sort((a, b) => {
+    let r = 0;
+    if (sortBy.value === 'name') r = a.name.localeCompare(b.name, 'zh');
+    else if (sortBy.value === 'time') r = a.mtime - b.mtime;
+    else r = a.size - b.size;
+    return sortOrder.value === 'asc' ? r : -r;
+  });
+});
+
+const filteredAudios = computed(() => {
+  let list = audios.value;
+  const q = searchQuery.value.trim().toLowerCase();
+  if (q) list = list.filter((e) => e.name.toLowerCase().includes(q));
+  return [...list].sort((a, b) => {
+    let r = 0;
+    if (sortBy.value === 'name') r = a.name.localeCompare(b.name, 'zh');
+    else if (sortBy.value === 'time') r = a.mtime - b.mtime;
+    else r = a.size - b.size;
+    return sortOrder.value === 'asc' ? r : -r;
+  });
+});
 
 /* ---------------- 海报抓取（后台，并发 2） ---------------- */
 
@@ -266,7 +325,7 @@ onBeforeUnmount(() => {
   <div class="nd-library">
     <!-- 页头 -->
     <div class="nd-pagehead">
-      <h2>影视库</h2>
+      <h2>媒体库</h2>
       <div class="nd-controls">
         <el-select
           v-model="storageId"
@@ -278,6 +337,8 @@ onBeforeUnmount(() => {
         </el-select>
         <el-radio-group v-model="mode">
           <el-radio-button value="video">视频</el-radio-button>
+          <el-radio-button value="image">图片</el-radio-button>
+          <el-radio-button value="audio">音频</el-radio-button>
           <el-radio-button value="document">文档</el-radio-button>
         </el-radio-group>
       </div>
@@ -366,12 +427,99 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="nd-empty" v-else>
-        <p>暂无视频内容</p>
+        <el-icon :size="48"><VideoCamera /></el-icon>
+        <h3>暂无视频内容</h3>
+        <p>该存储下还没有视频文件，上传后即可在此浏览和播放</p>
+      </div>
+    </template>
+
+    <!-- 图片模式 -->
+    <template v-if="mode === 'image'">
+      <div class="nd-toolbar">
+        <div class="nd-spacer"></div>
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索图片…"
+          clearable
+          style="width: 220px"
+          :prefix-icon="'Search'"
+        />
+        <el-select v-model="sortBy" style="width: 110px">
+          <el-option label="按时间" value="time" />
+          <el-option label="按名称" value="name" />
+          <el-option label="按大小" value="size" />
+        </el-select>
+        <el-button @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'">
+          {{ sortOrder === 'asc' ? '升序' : '降序' }}
+        </el-button>
+        <span class="nd-count">{{ filteredImages.length }} 张</span>
+      </div>
+
+      <div class="nd-image-grid" v-if="filteredImages.length">
+        <div
+          v-for="img in filteredImages"
+          :key="img.path"
+          class="nd-image-card"
+          @click="openImagePreview(img)"
+        >
+          <img :src="thumbUrl(img)" :alt="img.name" loading="lazy" />
+          <div class="nd-image-name">{{ img.name }}</div>
+          <div class="nd-image-meta">{{ fmtSize(img.size) }}</div>
+        </div>
+      </div>
+      <div class="nd-empty" v-else>
+        <el-icon :size="48"><Picture /></el-icon>
+        <h3>暂无图片</h3>
+        <p>该存储下还没有图片文件，上传后即可在此浏览</p>
+      </div>
+    </template>
+
+    <!-- 音频模式 -->
+    <template v-if="mode === 'audio'">
+      <div class="nd-toolbar">
+        <div class="nd-spacer"></div>
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索音频…"
+          clearable
+          style="width: 220px"
+          :prefix-icon="'Search'"
+        />
+        <el-select v-model="sortBy" style="width: 110px">
+          <el-option label="按时间" value="time" />
+          <el-option label="按名称" value="name" />
+          <el-option label="按大小" value="size" />
+        </el-select>
+        <el-button @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'">
+          {{ sortOrder === 'asc' ? '升序' : '降序' }}
+        </el-button>
+        <span class="nd-count">{{ filteredAudios.length }} 个</span>
+      </div>
+
+      <div class="nd-audio-list" v-if="filteredAudios.length">
+        <div v-for="a in filteredAudios" :key="a.path" class="nd-audio-card">
+          <button class="nd-audio-play" @click="playAudio(a)" title="播放">
+            <el-icon><CaretRight /></el-icon>
+          </button>
+          <div class="nd-audio-info">
+            <div class="nd-audio-name" :title="a.name">{{ a.name }}</div>
+            <div class="nd-audio-meta">
+              <span>{{ a.ext.toUpperCase() }}</span>
+              <span>{{ fmtSize(a.size) }}</span>
+              <span>{{ fmtTime(a.mtime) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="nd-empty" v-else>
+        <el-icon :size="48"><Headset /></el-icon>
+        <h3>暂无音频</h3>
+        <p>该存储下还没有音频文件</p>
       </div>
     </template>
 
     <!-- 文档模式 -->
-    <template v-else>
+    <template v-if="mode === 'document'">
       <div class="nd-toolbar">
         <div class="nd-spacer"></div>
         <el-input
@@ -410,9 +558,47 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="nd-empty" v-if="!filteredDocs.length">
-        <p>暂无文档</p>
+        <el-icon :size="48"><Document /></el-icon>
+        <h3>暂无文档</h3>
+        <p>该存储下还没有文档文件</p>
       </div>
     </template>
+
+    <!-- 大图预览 -->
+    <el-dialog
+      v-model="bigPreview"
+      :title="bigPreview?.name"
+      width="90%"
+      :show-close="true"
+      @close="bigPreview = null"
+    >
+      <img
+        v-if="bigPreview"
+        :src="previewUrl(storageId!, bigPreview.path, token)"
+        :alt="bigPreview.name"
+        class="nd-big-image"
+      />
+      <div v-if="bigPreview" class="nd-big-meta">
+        <span>{{ fmtSize(bigPreview.size) }}</span>
+        <span>{{ fmtTime(bigPreview.mtime) }}</span>
+      </div>
+    </el-dialog>
+
+    <!-- 音频播放器 -->
+    <el-dialog
+      v-model="audioPlaying"
+      :title="audioPlaying?.name"
+      width="480px"
+      @close="closeAudio"
+    >
+      <div v-if="audioPlaying" class="nd-audio-player">
+        <audio :src="previewUrl(storageId!, audioPlaying.path, token)" controls autoplay />
+        <div class="nd-audio-player-meta">
+          <span>{{ audioPlaying.ext.toUpperCase() }}</span>
+          <span>{{ fmtSize(audioPlaying.size) }}</span>
+        </div>
+      </div>
+    </el-dialog>
 
     <!-- 播放器 -->
     <VideoPlayer
@@ -429,6 +615,100 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.nd-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 20px 24px 0;
+}
+.nd-image-card {
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: transform 0.25s var(--ease-smooth),
+    box-shadow 0.25s var(--ease-smooth),
+    background 0.25s var(--ease-smooth);
+}
+.nd-image-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+  background: var(--glass-bg-hover);
+}
+.nd-image-card:active {
+  transform: translateY(0) scale(0.98);
+}
+.nd-image-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+.nd-image-name {
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 12px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nd-image-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 12px 12px;
+}
+.nd-big-image {
+  max-width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+}
+.nd-big-meta {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.nd-audio-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin: 20px 24px 0;
+}
+.nd-audio-info {
+  flex: 1;
+  min-width: 0;
+}
+.nd-audio-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nd-audio-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.nd-audio-player audio {
+  width: 100%;
+}
+.nd-audio-player-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
 .nd-doc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

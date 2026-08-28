@@ -201,6 +201,7 @@ onMounted(() => load(true));
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 .spacer {
   flex: 1;

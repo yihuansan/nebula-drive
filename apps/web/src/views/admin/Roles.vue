@@ -13,8 +13,10 @@ const roles = ref<RoleDef[]>([]);
 // roleKey -> Set of permission keys (checked)
 const checked = ref<Record<string, string[]>>({});
 const saving = ref<Record<string, boolean>>({});
+const loading = ref(false);
 
 async function load() {
+  loading.value = true;
   try {
     const meta = await api('/permissions');
     permissions.value = meta.permissions;
@@ -26,6 +28,8 @@ async function load() {
     }
   } catch (e: any) {
     ElMessage.error(e.message || '加载角色权限失败');
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -74,7 +78,7 @@ function count(roleKey: string): number {
 <template>
   <div class="page">
     <!-- 权限矩阵：每个角色一列，权限点按模块分组 -->
-    <section class="panel glass-card">
+    <section class="panel glass-card" v-loading="loading">
       <div class="panel-head">
         <el-icon class="panel-icon"><Lock /></el-icon>
         <span class="panel-title">角色权限矩阵</span>

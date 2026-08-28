@@ -7,6 +7,10 @@ import { fileIndex } from '../services/fileIndex.service.js';
 import { usageCache } from '../services/usageCache.service.js';
 import { getDriver } from '../storage/registry.js';
 
+/** by-type 结果缓存：递归扫描成本高，按 storageId+type 缓存 5 分钟 */
+const byTypeCache = new Map<string, { at: number; entries: any[] }>();
+const BY_TYPE_TTL = 5 * 60 * 1000;
+
 export async function newFeaturesRoutes(app: FastifyInstance) {
   // 按文件类型搜索（视频/文档）
   app.get('/files/by-type', { preHandler: authMiddleware }, async (req, reply) => {
@@ -15,16 +19,26 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     try {
       const rec = getStorageRecord(Number(storageId));
       if (!rec) return fail(reply, 404, '存储不存在');
-      
+
       // 定义文件类型扩展名
-      const VIDEO_EXTS = ['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv', 'webm'];
+      const VIDEO_EXTS = ['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv', 'webm', 'm4v', '3gp', 'ts'];
       const DOC_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md'];
-      
+      const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'jfif'];
+      const AUDIO_EXTS = ['mp3', 'flac', 'wav', 'ogg', 'aac', 'm4a', 'opus', 'wma', 'ape'];
+
       let exts: string[] = [];
       if (type === 'video') exts = VIDEO_EXTS;
       else if (type === 'document') exts = DOC_EXTS;
-      
-      // P2-8 修复：递归扫描所有子目录
+      else if (type === 'image') exts = IMAGE_EXTS;
+      else if (type === 'audio') exts = AUDIO_EXTS;
+
+      const cacheKey = `${storageId}:${type}`;
+      const cached = byTypeCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < BY_TYPE_TTL) {
+        return ok(reply, { entries: cached.entries, cached: true });
+      }
+
+      // 递归扫描所有子目录
       const allEntries: any[] = [];
       const scanDir = async (dirPath: string) => {
         const { entries } = await fileService.list(Number(storageId), dirPath, 'name', 'asc');
@@ -41,8 +55,14 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
         }
       };
       await scanDir('/');
-      
-      return ok(reply, { entries: allEntries });
+
+      // 容量上限，防止 Map 无限增长
+      if (byTypeCache.size >= 100) {
+        const oldest = byTypeCache.keys().next().value;
+        if (oldest) byTypeCache.delete(oldest);
+      }
+      byTypeCache.set(cacheKey, { at: Date.now(), entries: allEntries });
+      return ok(reply, { entries: allEntries, cached: false });
     } catch (e: any) {
       return fail(reply, 500, e.message || '加载失败');
     }
@@ -51,6 +71,7 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
   // 最近访问文件（基于真实访问历史）
   app.get('/files/recent', { preHandler: authMiddleware }, async (req, reply) => {
     const { storageId, limit = '50' } = req.query as Record<string, string>;
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
     if (!storageId) return fail(reply, 400, '缺少 storageId');
     try {
       const rec = getStorageRecord(Number(storageId));
@@ -62,7 +83,7 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       // 从 recent_access 表获取该用户的访问记录
       const rows = db.prepare(
         'SELECT * FROM recent_access WHERE user_id = ? AND storage_id = ? ORDER BY accessed_at DESC LIMIT ?'
-      ).all(userId, Number(storageId), Number(limit)) as any[];
+      ).all(userId, Number(storageId), safeLimit) as any[];
       
       // P2-9 修复：批量 stat，避免 N+1
       const stats = await Promise.all(rows.map((row) => driver.stat(row.path).catch(() => null)));
@@ -121,26 +142,29 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
     const db = getDb();
     const rows = db.prepare('SELECT * FROM quick_access WHERE storage_id = ? ORDER BY created_at DESC').all(Number(storageId)) as any[];
     const driver = getDriver(rec);
-    // 逐条映射为 camelCase + 实时 stat（size/isDir），失效项自动清理
+    const statsP = Promise.all(rows.map(row => driver.stat(row.path).catch(() => null)));
+    const statsArr = await statsP;
     const entries: any[] = [];
-    for (const row of rows) {
-      try {
-        const stat = await driver.stat(row.path);
-        if (stat) {
-          entries.push({
-            id: row.id,
-            path: row.path,
-            name: row.name,
-            isDir: row.is_dir === 1,
-            size: stat.size || 0,
-            createdAt: row.created_at,
-          });
-        } else {
-          db.prepare('DELETE FROM quick_access WHERE id = ?').run(row.id);
-        }
-      } catch {
-        db.prepare('DELETE FROM quick_access WHERE id = ?').run(row.id);
+    const deleteIds: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const stat = statsArr[i];
+      if (stat) {
+        entries.push({
+          id: row.id,
+          path: row.path,
+          name: row.name,
+          isDir: row.is_dir === 1,
+          size: stat.size || 0,
+          createdAt: row.created_at,
+        });
+      } else {
+        deleteIds.push(row.id);
       }
+    }
+    if (deleteIds.length) {
+      const placeholders = deleteIds.map(() => '?').join(', ');
+      db.prepare(`DELETE FROM quick_access WHERE id IN (${placeholders})`).run(...deleteIds);
     }
     return ok(reply, { entries });
   });
@@ -171,7 +195,7 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       // 无法 stat 时按文件记录
     }
     db.prepare('INSERT INTO quick_access (storage_id, path, name, is_dir, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(
-      Number(storageId), fullPath, fullPath.split('/').pop(), isDir
+      Number(storageId), fullPath, fullPath.split('/').pop() || '', isDir
     );
     return ok(reply, { action: 'added' });
   });
@@ -185,15 +209,14 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
 
   // 设置隐藏空间密码
   app.post('/hidden-space/set-password', { preHandler: authMiddleware }, async (req, reply) => {
+    if (req.user!.role !== 'admin') return fail(reply, 403, '无权操作');
     const { storageId, password } = req.body as { storageId?: number; password?: string };
     if (!storageId || !password) return fail(reply, 400, '缺少参数');
     if (password.length < 4) return fail(reply, 400, '密码至少 4 位');
     
     const db = getDb();
-    // P1-9 修复：使用 scrypt 哈希 + 随机盐，防止可逆泄露
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-    // 检查是否已存在
     const existing = db.prepare('SELECT * FROM hidden_space_settings WHERE storage_id = ?').get(Number(storageId)) as any;
     if (existing) {
       db.prepare('UPDATE hidden_space_settings SET password_hash = ?, salt = ? WHERE storage_id = ?').run(hash, salt, Number(storageId));
@@ -205,6 +228,7 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
 
   // 隐藏空间解锁
   app.post('/hidden-space/unlock', { preHandler: authMiddleware }, async (req, reply) => {
+    if (req.user!.role !== 'admin') return fail(reply, 403, '无权操作');
     const { storageId, password } = req.body as { storageId?: number; password?: string };
     if (!storageId || !password) return fail(reply, 400, '缺少参数');
     
@@ -214,26 +238,22 @@ export async function newFeaturesRoutes(app: FastifyInstance) {
       return fail(reply, 400, '请先设置密码');
     }
     
-    // P1-9 修复：使用 scrypt 验证密码
     const salt = existing.salt || '';
-    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-    if (existing.password_hash !== hash) {
+    const hashBuf = crypto.scryptSync(password, salt, 64);
+    const expectedBuf = Buffer.from(existing.password_hash, 'hex');
+    if (hashBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(hashBuf, expectedBuf)) {
       return ok(reply, { unlocked: false });
     }
     
-    // 确保 hidden 目录存在
     try {
       const rec = getStorageRecord(Number(storageId));
       if (rec) {
         const driver = getDriver(rec);
-        // 尝试创建 hidden 目录
         await driver.mkdir('/hidden');
-        // P2-5/P2-6: 新建目录 → 使搜索索引与用量缓存失效
         fileIndex.markDirty(Number(storageId));
         usageCache.invalidate(Number(storageId));
       }
     } catch {
-      // 目录可能已存在，忽略错误
     }
     
     return ok(reply, { unlocked: true });

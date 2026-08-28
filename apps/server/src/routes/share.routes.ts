@@ -35,18 +35,26 @@ export async function shareRoutes(app: FastifyInstance) {
   });
 
   app.put('/shares/:id', { preHandler: requirePermission('files:share') }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const s = shareService.byId(id);
+    if (!s) return fail(reply, 404, '分享不存在');
+    if (s.created_by !== req.user!.sub && req.user!.role !== 'admin') return fail(reply, 403, '无权操作');
     const b = req.body as { name?: string; password?: string | null; expiresAt?: string | null; maxDownloads?: number | null; enabled?: boolean };
     try {
-      const s = shareService.update(Number((req.params as { id: string }).id), b);
-      return ok(reply, { share: s });
+      const updated = shareService.update(id, b);
+      return ok(reply, { share: updated });
     } catch (e: any) {
       return fail(reply, 400, e?.message || '更新分享失败');
     }
   });
 
   app.delete('/shares/:id', { preHandler: requirePermission('files:share') }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const s = shareService.byId(id);
+    if (!s) return fail(reply, 404, '分享不存在');
+    if (s.created_by !== req.user!.sub && req.user!.role !== 'admin') return fail(reply, 403, '无权操作');
     try {
-      shareService.remove(Number((req.params as { id: string }).id));
+      shareService.remove(id);
       return ok(reply, { ok: true });
     } catch (e: any) {
       return fail(reply, 400, e?.message || '删除分享失败');
@@ -64,7 +72,7 @@ export async function shareRoutes(app: FastifyInstance) {
     return ok(reply, { share: info, appUrl: config.appUrl });
   });
 
-  app.post('/s/:token/extract', async (req, reply) => {
+  app.post('/s/:token/extract', { config: { rateLimit: { max: 10, timeWindow: 60000, keyGenerator: (req) => String((req.params as any).token || req.ip) } } }, async (req, reply) => {
     const b = req.body as { password?: string };
     const ticket = shareService.extract(String((req.params as { token: string }).token), b.password || '');
     if (!ticket) return fail(reply, 403, '提取码错误或分享已失效');

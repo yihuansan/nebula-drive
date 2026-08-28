@@ -34,20 +34,15 @@ export function generateSecret(): string {
 
 /** 生成 TOTP 6 位验证码 */
 export function generateCode(secret: string, timeWindow = 30): number {
-  const totp = new TOTP({
-    secret,
-    window: 1,
-  });
+  const totp = new TOTP({ secret, period: timeWindow });
   return parseInt(totp.generate(), 10);
 }
 
 /** 验证 TOTP 代码（允许前后 1 个时间窗口容错） */
 export function verifyCode(secret: string, code: number, timeWindow = 30): boolean {
-  const totp = new TOTP({
-    secret,
-    window: 1,
-  });
-  return totp.validate({ token: String(code).padStart(6, '0') }) !== null;
+  const totp = new TOTP({ secret, period: timeWindow });
+  // window: 1 表示允许前后 1 个时间步长容错
+  return totp.validate({ token: String(code).padStart(6, '0'), window: 1 }) !== null;
 }
 
 /** 生成恢复码（10 个，每个 8 位） */
@@ -63,10 +58,9 @@ export function generateRecoveryCodes(count = 10): string[] {
 /** 生成 otpauth:// URI（供 QR 码扫描） */
 export function getOtpAuthUri(secret: string, username: string, issuer = 'NebulaDrive'): string {
   const totp = new TOTP({
-    name: username,
+    label: username,
     issuer,
     secret,
-    window: 1,
   });
   return totp.toString();
 }

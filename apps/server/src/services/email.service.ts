@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { getSetting } from './settings.service.js';
+import { decryptFieldIfEncrypted } from '../utils/crypto.js';
 import { config } from '../config.js';
 
 /**
@@ -14,6 +15,7 @@ export interface SmtpConfig {
   host: string;
   port: number;
   secure: boolean;
+  insecure: boolean;
   user: string;
   password: string;
   from: string;
@@ -28,8 +30,10 @@ export function getSmtpConfig(): SmtpConfig {
     host: (getSetting('smtpHost') || '').trim(),
     port: Number.isFinite(port) && port > 0 ? port : 465,
     secure: getSetting('smtpSecure') === 'true',
+    // 默认校验 TLS 证书；仅当显式配置 smtpInsecure=true（自签/内网）才跳过
+    insecure: getSetting('smtpInsecure') === 'true',
     user: (getSetting('smtpUser') || '').trim(),
-    password: (getSetting('smtpPassword') || '').trim(),
+    password: (decryptFieldIfEncrypted(getSetting('smtpPassword') || '')).trim(),
     from: (getSetting('smtpFrom') || getSetting('smtpUser') || '').trim(),
     fromName: (getSetting('smtpFromName') || '').trim(),
   };
@@ -50,12 +54,11 @@ function buildTransporter(cfg: SmtpConfig) {
   return nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
-    secure: cfg.secure, // true = 465 强制 TLS
-    ignoreTLS: !cfg.secure, // 非强制 TLS（如 587 STARTTLS）时忽略证书校验
+    secure: cfg.secure, // true = 465 强制 TLS；false = 587 STARTTLS
+    ignoreTLS: cfg.insecure, // 仅显式配置 insecure 时忽略证书校验
     auth: cfg.user ? { user: cfg.user, pass: cfg.password } : undefined,
     tls: {
-      // 自签 / 内网 SMTP 常无有效证书，放宽校验保证可用
-      rejectUnauthorized: false,
+      rejectUnauthorized: !cfg.insecure,
     },
   });
 }

@@ -43,8 +43,8 @@ export function revokeSession(userId: number, sessionId: number, tokenExpiryHour
   const row = db.prepare('SELECT token_hash FROM user_sessions WHERE id = ? AND user_id = ?').get(sessionId, userId) as any;
   if (!row) return false;
 
-  // 将 token 加入撤销列表
-  const expiresAt = new Date(Date.now() + tokenExpiryHours * 3600 * 1000).toISOString();
+  // 覆盖最长有效期（默认 JWT TTL=7天），避免撤销记录先过期导致 token 复活
+  const expiresAt = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
   db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
     .run(row.token_hash, userId, expiresAt);
 
@@ -58,7 +58,8 @@ export function revokeOtherSessions(userId: number, currentTokenHash: string, to
   const db = getDb();
   const others = db.prepare('SELECT token_hash FROM user_sessions WHERE user_id = ? AND token_hash != ?').all(userId, currentTokenHash) as any[];
   
-  const expiresAt = new Date(Date.now() + tokenExpiryHours * 3600 * 1000).toISOString();
+  // 覆盖最长有效期（默认 JWT TTL=7天），避免撤销记录先过期导致 token 复活
+  const expiresAt = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
   const insert = db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)');
   
   for (const s of others) {
@@ -66,20 +67,21 @@ export function revokeOtherSessions(userId: number, currentTokenHash: string, to
   }
   
   const result = db.prepare('DELETE FROM user_sessions WHERE user_id = ? AND token_hash != ?').run(userId, currentTokenHash);
-  return result.changes;
+  return Number(result.changes);
 }
 
 /** 撤销用户的全部会话（admin 强制下线）：所有 token 加入撤销列表并删除会话记录 */
 export function revokeAllSessions(userId: number, tokenExpiryHours: number): number {
   const db = getDb();
   const sessions = db.prepare('SELECT token_hash FROM user_sessions WHERE user_id = ?').all(userId) as any[];
-  const expiresAt = new Date(Date.now() + tokenExpiryHours * 3600 * 1000).toISOString();
+  // 覆盖最长有效期（默认 JWT TTL=7天），避免撤销记录先过期导致 token 复活
+  const expiresAt = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
   const insert = db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)');
   for (const s of sessions) {
     insert.run(s.token_hash, userId, expiresAt);
   }
   const result = db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
-  return result.changes;
+  return Number(result.changes);
 }
 
 /** 检查 token 是否已被撤销 */
@@ -103,7 +105,7 @@ export function cleanup(): { revoked: number; sessions: number } {
   const revoked = db.prepare("DELETE FROM revoked_tokens WHERE expires_at < datetime('now')").run();
   // 清理超过 30 天未活跃的会话
   const sessions = db.prepare("DELETE FROM user_sessions WHERE last_active < datetime('now', '-30 days')").run();
-  return { revoked: revoked.changes, sessions: sessions.changes };
+  return { revoked: Number(revoked.changes), sessions: Number(sessions.changes) };
 }
 
 /** 从 User-Agent 解析设备名称 */

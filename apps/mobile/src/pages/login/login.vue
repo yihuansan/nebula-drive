@@ -11,7 +11,6 @@
       <input class="input" type="password" v-model="password" placeholder="密码" />
       <view class="btn-primary" @click="doLogin">登 录</view>
       <view class="error" v-if="err">{{ err }}</view>
-      <view class="muted hint">默认管理员账号：admin / admin123</view>
     </view>
   </view>
 </template>

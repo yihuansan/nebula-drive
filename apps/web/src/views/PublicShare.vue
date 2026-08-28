@@ -229,7 +229,11 @@ onMounted(loadShare);
                   </el-tooltip>
                 </div>
               </div>
-              <div v-if="!loading && !entries.length" class="grid-empty">此文件夹为空</div>
+              <div v-if="!loading && !entries.length" class="grid-empty">
+                <el-icon :size="36"><FolderOpened /></el-icon>
+                <h3>此文件夹为空</h3>
+                <p>该文件夹下暂无文件</p>
+              </div>
             </div>
           </template>
 
@@ -506,11 +510,16 @@ onMounted(loadShare);
 }
 .grid-empty {
   grid-column: 1 / -1;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   padding: 48px 0;
   color: var(--text-secondary);
-  font-size: 14px;
 }
+.grid-empty .el-icon { opacity: 0.5; }
+.grid-empty h3 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); }
+.grid-empty p { margin: 0; font-size: 13px; }
 
 /* ---------- 文件分享卡 ---------- */
 .file-share-card {

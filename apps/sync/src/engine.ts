@@ -32,7 +32,8 @@ function conflictName(rel: string): string {
   const d = new Date();
   const ts =
     `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}` +
-    `${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+    `${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}` +
+    `${String(d.getMilliseconds()).padStart(3, '0')}`;
   return `${dir}${stem} (conflict ${ts})${ext}`;
 }
 
@@ -114,9 +115,16 @@ export class SyncEngine {
 
   private async pullFile(rel: string, remoteMtime: number): Promise<void> {
     const dest = this.localAbs(rel);
+    const tmp = `${dest}.tmp_${process.pid}_${Date.now()}`;
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     const buf = await this.client.pull(rel);
-    fs.writeFileSync(dest, buf);
+    try {
+      fs.writeFileSync(tmp, buf);
+      fs.renameSync(tmp, dest);
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch {}
+      throw e;
+    }
     const t = remoteMtime / 1000;
     try {
       fs.utimesSync(dest, t, t);
@@ -154,9 +162,16 @@ export class SyncEngine {
       errors: [],
     };
     const mode = this.pair.mode;
+    let remoteValidated = true;
 
     fs.mkdirSync(this.pair.localDir, { recursive: true });
-    const remote = await this.client.manifest();
+    let remote: Map<string, { size: number; mtime: number; hash?: string }>;
+    try {
+      remote = await this.client.manifest();
+    } catch (e) {
+      rep.errors.push('manifest: ' + (e as Error).message);
+      return rep;
+    }
     const local = scanLocal(this.pair.localDir);
     const base = this.base;
     this.pushedRels = [];
@@ -227,7 +242,7 @@ export class SyncEngine {
           }
         } else if (!L && R) {
           if (mode === 'push') {
-            if (S) {
+            if (S && L && S.size === L.size && Math.abs(S.mtime - L.mtime) <= MTIME_TOL) {
               // 本地已删除且该文件曾同步 → 传播删除到远端
               await this.client.remove(rel);
               this.delBase(rel);

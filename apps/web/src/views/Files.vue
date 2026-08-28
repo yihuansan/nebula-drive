@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
+import ImageEditor from '../components/ImageEditor.vue';
 import { useTheme, THEMES, type ThemeKey } from '../useTheme';
 import { useAuthStore } from '../stores/auth';
 
@@ -15,12 +16,63 @@ const loading = ref(false);
 const hasLoaded = ref(false);
 const selected = ref<any[]>([]);
 const tableRef = ref();
+
+/* ---------- 刷新防闪烁：stale-while-revalidate ----------
+   上次成功加载的列表存 sessionStorage；整页刷新时先渲染缓存（hasLoaded 立即为 true，
+   无骨架屏闪烁），再后台 load() 拉新数据平滑替换 */
+const FILES_CACHE_KEY = 'nd-files-cache';
+/* 当前位置（storageId+path）持久化：刷新后回到上次浏览位置，使文件缓存能命中 */
+const FILES_LOC_KEY = 'nd-files-location';
+function restoreLocation(): { storageId: number; path: string } | null {
+  try {
+    const raw = sessionStorage.getItem(FILES_LOC_KEY);
+    if (!raw) return null;
+    const loc = JSON.parse(raw);
+    if (typeof loc.storageId === 'number' && typeof loc.path === 'string') return loc;
+    return null;
+  } catch {
+    return null;
+  }
+}
+function saveLocation() {
+  try {
+    sessionStorage.setItem(FILES_LOC_KEY, JSON.stringify({
+      storageId: storageId.value,
+      path: path.value,
+    }));
+  } catch { /* 忽略 */ }
+}
+function restoreFilesCache() {
+  try {
+    const raw = sessionStorage.getItem(FILES_CACHE_KEY);
+    if (!raw) return false;
+    const c = JSON.parse(raw);
+    // 仅当缓存的 storageId+path 与当前一致时恢复
+    if (c.storageId !== storageId.value || c.path !== path.value) return false;
+    entries.value = c.entries || [];
+    hasLoaded.value = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function saveFilesCache() {
+  try {
+    sessionStorage.setItem(FILES_CACHE_KEY, JSON.stringify({
+      storageId: storageId.value,
+      path: path.value,
+      entries: entries.value,
+    }));
+  } catch { /* 超出容量等，忽略 */ }
+}
 /* 视图持久化（F2）：从 localStorage 恢复，切换时写回 */
 const _storedView = localStorage.getItem('nd-view');
 const view = ref<'grid' | 'list' | 'photo'>(
   _storedView === 'grid' || _storedView === 'list' || _storedView === 'photo' ? _storedView : 'grid'
 );
 watch(view, (v) => localStorage.setItem('nd-view', v));
+// 位置变化时持久化（storageId 或 path 变更），刷新后可恢复
+watch([storageId, path], () => saveLocation());
 const multiSelectMode = ref(false);
 
 /* ---------- 共享给用户功能 ---------- */
@@ -515,6 +567,7 @@ function handleToolbarMore(cmd: string) {
     case 'sort-size': sortKey.value = 'size'; load(); break;
     case 'sort-mtime': sortKey.value = 'mtime'; load(); break;
     case 'tag-filter': tagFilterDialog.value = true; break;
+    case 'transcode-tasks': openTranscodeTasks(); break;
     case 'multi-select':
       multiSelectMode.value = !multiSelectMode.value;
       if (!multiSelectMode.value) selected.value = [];
@@ -576,6 +629,7 @@ async function load() {
       `/files?storageId=${storageId.value}&path=${encodeURIComponent(path.value)}&sort=${sortKey.value}&order=${sortOrder.value}`
     );
     entries.value = r.entries;
+    saveFilesCache();
   } catch (e: any) {
     ElMessage.error(e.message || '加载目录失败');
   } finally {
@@ -793,8 +847,22 @@ async function dirPickerNewFolder() {
   }
 }
 
+const moveTargets = ref<any[]>([]);
+const moveBatch = ref(false);
 function openMove(row: any, mode: 'move' | 'copy') {
   moveTarget.value = row;
+  moveTargets.value = [];
+  moveBatch.value = false;
+  moveMode.value = mode;
+  moveDest.value = parent.value || '/';
+  moveDialog.value = true;
+  loadDirPicker(moveDest.value);
+}
+/** 批量移动 / 复制（多选模式） */
+function openBatchMove(mode: 'move' | 'copy') {
+  if (!selected.value.length) return;
+  moveTargets.value = selected.value;
+  moveBatch.value = true;
   moveMode.value = mode;
   moveDest.value = parent.value || '/';
   moveDialog.value = true;
@@ -803,12 +871,23 @@ function openMove(row: any, mode: 'move' | 'copy') {
 async function doMove() {
   const dest = moveDest.value.trim() || '/';
   const destDir = dest.endsWith('/') ? dest : dest + '/';
-  const destPath = (destDir === '/' ? '' : destDir) + moveTarget.value.name;
   try {
-    await api(moveMode.value === 'move' ? '/files/move' : '/files/copy', {
-      method: 'POST',
-      body: JSON.stringify({ storageId: storageId.value, path: moveTarget.value.path, destPath }),
-    });
+    if (moveBatch.value) {
+      await api(moveMode.value === 'move' ? '/files/batch-move' : '/files/batch-copy', {
+        method: 'POST',
+        body: JSON.stringify({
+          storageId: storageId.value,
+          paths: moveTargets.value.map((r: any) => r.path),
+          destPath: destDir,
+        }),
+      });
+    } else {
+      const destPath = (destDir === '/' ? '' : destDir) + moveTarget.value.name;
+      await api(moveMode.value === 'move' ? '/files/move' : '/files/copy', {
+        method: 'POST',
+        body: JSON.stringify({ storageId: storageId.value, path: moveTarget.value.path, destPath }),
+      });
+    }
     ElMessage.success(moveMode.value === 'move' ? '移动成功' : '复制成功');
     moveDialog.value = false;
     load();
@@ -877,6 +956,15 @@ const previewName = ref('');
 const previewPath = ref('');  // 完整文件路径（用于新窗口打开）
 const previewSize = ref(0);
 const previewKind = ref<'image' | 'video' | 'audio' | 'pdf' | 'code'>('image');
+
+/* ---------- 图片编辑器（裁剪/压缩） ---------- */
+const editorOpen = ref(false);
+const editorSrc = ref<{ url: string; name: string; path: string } | null>(null);
+function openEditor() {
+  if (!previewUrl.value || !previewPath.value) return;
+  editorSrc.value = { url: previewUrl.value, name: previewName.value, path: previewPath.value };
+  editorOpen.value = true;
+}
 /* ---------- 图片增强功能（对标百度网盘/夸克/Google Drive） ---------- */
 const imgScale = ref(1);          // 缩放比例 (0.1 ~ 5.0)
 const imgRotation = ref(0);       // 旋转角度 (0/90/180/270)
@@ -1100,10 +1188,131 @@ async function openInNewTab() {
   }
 }
 
-/* ---------- 上传 ---------- */
+/* ---------- 上传（批量 / 拖拽 / 断点续传）---------- */
 const fileInput = ref<HTMLInputElement>();
+const resumeInput = ref<HTMLInputElement>();
 const uploadDialog = ref(false);
-const uploads = ref<{ name: string; percent: number; status: string }[]>([]);
+const dragging = ref(false);
+let dragDepth = 0;
+
+interface UploadItem {
+  name: string;
+  size: number;
+  percent: number;
+  status: 'uploading' | 'done' | 'error' | 'waiting-file';
+  error?: string;
+  file?: File;
+  uploadId?: string;
+  chunkSize?: number;
+  doneChunks?: number[];
+}
+const uploads = ref<UploadItem[]>([]);
+const UPLOAD_QUEUE_KEY = 'nd-upload-queue';
+const MAX_CONCURRENT = 3;
+let activeUploads = 0;
+
+function saveQueue() {
+  try {
+    const items = uploads.value
+      .filter((u) => u.status !== 'done')
+      .map((u) => ({
+        name: u.name,
+        size: u.size,
+        percent: u.percent,
+        status: u.status,
+        error: u.error,
+        uploadId: u.uploadId,
+        chunkSize: u.chunkSize,
+        doneChunks: u.doneChunks,
+      }));
+    if (items.length) localStorage.setItem(UPLOAD_QUEUE_KEY, JSON.stringify(items));
+    else localStorage.removeItem(UPLOAD_QUEUE_KEY);
+  } catch { /* 忽略 */ }
+}
+
+/** 并发上传泵：最多 MAX_CONCURRENT 个并行 */
+function pumpQueue() {
+  const pending = uploads.value.filter((u) => u.status === 'uploading' && !u.started);
+  for (const u of pending) {
+    if (activeUploads >= MAX_CONCURRENT) break;
+    (u as any).started = true;
+    activeUploads++;
+    void uploadOne(u).finally(() => {
+      activeUploads--;
+      delete (u as any).started;
+      saveQueue();
+      if (uploads.value.every((x) => x.status === 'done')) {
+        load();
+        setTimeout(() => { if (uploads.value.every((x) => x.status === 'done')) uploadDialog.value = false; }, 1200);
+      }
+      pumpQueue();
+    });
+  }
+}
+
+function startUploads(files: File[]) {
+  let added = false;
+  for (const f of files) {
+    // 同名同大小的进行中任务去重
+    const dup = uploads.value.find((u) => u.name === f.name && u.size === f.size && u.status === 'uploading');
+    if (dup) continue;
+    const u: UploadItem = { name: f.name, size: f.size, percent: 0, status: 'uploading', file: f };
+    uploads.value.push(u);
+    added = true;
+  }
+  if (added) {
+    uploadDialog.value = true;
+    saveQueue();
+    pumpQueue();
+  }
+}
+
+async function uploadOne(u: UploadItem) {
+  try {
+    if (u.size <= 10 * 1024 * 1024) await directUpload(u);
+    else await chunkUpload(u);
+    u.status = 'done';
+    u.percent = 100;
+  } catch (err: any) {
+    u.status = 'error';
+    u.error = err?.message || '未知错误';
+  }
+}
+
+function retryUpload(u: UploadItem) {
+  if (u.status !== 'error' || !u.file) return;
+  u.status = 'uploading';
+  u.error = undefined;
+  pumpQueue();
+}
+
+function cancelUpload(u: UploadItem) {
+  const idx = uploads.value.indexOf(u);
+  if (idx >= 0) uploads.value.splice(idx, 1);
+  saveQueue();
+  if (u.uploadId) {
+    void api(`/upload/${u.uploadId}`, { method: 'DELETE' }).catch(() => { /* 忽略 */ });
+  }
+}
+
+/** 拖拽上传 */
+function onDragEnter(e: DragEvent) {
+  e.preventDefault();
+  dragDepth++;
+  dragging.value = true;
+}
+function onDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dragging.value = false;
+}
+function onDrop(e: DragEvent) {
+  e.preventDefault();
+  dragDepth = 0;
+  dragging.value = false;
+  const dt = e.dataTransfer;
+  const files = dt ? Array.from(dt.files) : [];
+  if (files.length) startUploads(files);
+}
 
 function pickFiles() {
   fileInput.value?.click();
@@ -1111,34 +1320,58 @@ function pickFiles() {
 
 function onPick(e: Event) {
   const files = (e.target as HTMLInputElement).files;
-  if (files && files.length) {
-    uploadDialog.value = true;
-    startUploads(Array.from(files));
-  }
+  if (files && files.length) startUploads(Array.from(files));
   (e.target as HTMLInputElement).value = '';
 }
 
-async function startUploads(files: File[]) {
+let resumeTarget: UploadItem | null = null;
+/** 针对某个 waiting-file 项重新选择文件 */
+function resumeUpload(u: UploadItem) {
+  resumeTarget = u;
+  resumeInput.value?.click();
+}
+/** 恢复未完成的上传（刷新后 File 对象丢失，需用户重新选择同名同大小的文件） */
+function onResumePick(e: Event) {
+  const files = Array.from((e.target as HTMLInputElement).files || []);
+  (e.target as HTMLInputElement).value = '';
   for (const f of files) {
-    // 先 push 再取回，确保拿到的是响应式代理（直接改普通对象不会触发视图更新）
-    uploads.value.push({ name: f.name, percent: 0, status: '上传中' });
-    const u = uploads.value[uploads.value.length - 1];
-    try {
-      if (f.size <= 10 * 1024 * 1024) {
-        await directUpload(f, u);
-      } else {
-        await chunkUpload(f, u);
-      }
-      u.status = '完成';
-      u.percent = 100;
-    } catch (err: any) {
-      u.status = '失败: ' + (err.message || '未知错误');
+    const byTarget =
+      resumeTarget && resumeTarget.name === f.name && resumeTarget.size === f.size
+        ? resumeTarget
+        : null;
+    const target =
+      byTarget ||
+      uploads.value.find((u) => u.status === 'waiting-file' && u.name === f.name && u.size === f.size);
+    if (target) {
+      target.file = f;
+      target.status = 'uploading';
     }
   }
-  load();
-  if (uploads.value.every((x) => x.status === '完成')) {
-    setTimeout(() => { uploadDialog.value = false; }, 1200);
-  }
+  resumeTarget = null;
+  pumpQueue();
+}
+
+/** 页面加载时恢复上传队列 */
+function restoreUploadQueue() {
+  try {
+    const raw = localStorage.getItem(UPLOAD_QUEUE_KEY);
+    if (!raw) return;
+    const items = JSON.parse(raw);
+    if (!Array.isArray(items) || !items.length) return;
+    for (const it of items) {
+      uploads.value.push({
+        name: it.name,
+        size: it.size || 0,
+        percent: it.percent || 0,
+        status: it.status === 'uploading' ? 'waiting-file' : it.status,
+        error: it.error,
+        uploadId: it.uploadId,
+        chunkSize: it.chunkSize,
+        doneChunks: it.doneChunks,
+      });
+    }
+    if (uploads.value.some((u) => u.status === 'waiting-file')) uploadDialog.value = true;
+  } catch { /* 忽略 */ }
 }
 
 /* ---------- 直接分享 ---------- */
@@ -1188,38 +1421,121 @@ function copyShareUrl() {
   );
 }
 
-async function directUpload(f: File, u: any) {
+async function directUpload(u: UploadItem) {
   const fd = new FormData();
   fd.append('storageId', String(storageId.value));
   fd.append('path', path.value);
-  fd.append('name', f.name);
-  fd.append('file', f);
+  fd.append('name', u.name);
+  fd.append('file', u.file!);
   await api('/upload/direct', { method: 'POST', body: fd });
   u.percent = 100;
 }
 
-async function chunkUpload(f: File, u: any) {
-  const init = await api('/upload/init', {
-    method: 'POST',
-    body: JSON.stringify({ storageId: storageId.value, path: path.value, name: f.name, size: f.size }),
-  });
-  const { uploadId, chunkSize } = init;
-  const total = Math.ceil(f.size / chunkSize);
+/** 分片上传（支持断点续传：已有会话则跳过已收到的分片） */
+async function chunkUpload(u: UploadItem) {
+  // 已有会话则查询服务端已收到的分片（断点续传）
+  if (u.uploadId) {
+    try {
+      const st = await api<any>(`/upload/status?uploadId=${u.uploadId}`);
+      u.chunkSize = st.chunkSize;
+      u.doneChunks = st.receivedChunks || [];
+    } catch {
+      // 会话已失效，重新初始化
+      u.uploadId = undefined;
+      u.doneChunks = undefined;
+    }
+  }
+  if (!u.uploadId) {
+    const init = await api<any>('/upload/init', {
+      method: 'POST',
+      body: JSON.stringify({ storageId: storageId.value, path: path.value, name: u.name, size: u.size }),
+    });
+    u.uploadId = init.uploadId;
+    u.chunkSize = init.chunkSize;
+  }
+  const chunkSize = u.chunkSize;
+  const total = Math.ceil(u.size / chunkSize);
+  const done = new Set<number>(u.doneChunks || []);
+  let sent = done.size;
   const token = localStorage.getItem('nebula_token') || '';
   for (let i = 0; i < total; i++) {
+    if (done.has(i)) continue;
     const off = i * chunkSize;
-    const chunk = f.slice(off, Math.min(off + chunkSize, f.size));
-    const res = await fetch(`/api/v1/upload/chunk?uploadId=${uploadId}&chunkIndex=${i}`, {
+    const chunk = u.file!.slice(off, Math.min(off + chunkSize, u.size));
+    const res = await fetch(`/api/v1/upload/chunk?uploadId=${u.uploadId}&chunkIndex=${i}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
       body: chunk,
     });
     if (!res.ok) throw new Error(`分片 ${i} 上传失败 (HTTP ${res.status})`);
-    u.percent = Math.round(((i + 1) / total) * 100);
+    done.add(i);
+    sent++;
+    u.percent = Math.round((sent / total) * 100);
   }
-  await api('/upload/complete', { method: 'POST', body: JSON.stringify({ uploadId }) });
+  await api('/upload/complete', { method: 'POST', body: JSON.stringify({ uploadId: u.uploadId }) });
   u.percent = 100;
 }
+
+/* ---------- 视频转码 ---------- */
+const transcodeDialog = ref(false);
+const transcodeTasks = ref<any[]>([]);
+const transcodeQuality = ref('standard');
+const transcoding = ref(false);
+const selectedHasVideo = computed(() => selected.value.some((r: any) => !r.isDir && isVideo(r.name)));
+let transcodeTimer: ReturnType<typeof setInterval> | null = null;
+
+async function createTranscodes() {
+  const vids = selected.value.filter((r: any) => !r.isDir && isVideo(r.name));
+  if (!vids.length) return;
+  transcoding.value = true;
+  try {
+    for (const v of vids) {
+      await api('/media/transcode', {
+        method: 'POST',
+        body: JSON.stringify({ storageId: storageId.value, path: v.path, quality: transcodeQuality.value }),
+      });
+    }
+    ElMessage.success(`已创建 ${vids.length} 个转码任务`);
+    openTranscodeTasks();
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建转码任务失败');
+  } finally {
+    transcoding.value = false;
+  }
+}
+
+async function refreshTranscodeTasks() {
+  try {
+    const r = await api<any>('/media/transcode');
+    transcodeTasks.value = r.tasks || [];
+  } catch { /* 忽略 */ }
+}
+function openTranscodeTasks() {
+  transcodeDialog.value = true;
+  refreshTranscodeTasks();
+  if (!transcodeTimer) transcodeTimer = setInterval(refreshTranscodeTasks, 2000);
+}
+function closeTranscodeTasks() {
+  transcodeDialog.value = false;
+  if (transcodeTimer) {
+    clearInterval(transcodeTimer);
+    transcodeTimer = null;
+  }
+}
+async function cancelTranscode(id: number) {
+  try {
+    await api(`/media/transcode/${id}`, { method: 'DELETE' });
+    refreshTranscodeTasks();
+  } catch (e: any) {
+    ElMessage.error(e.message || '取消失败');
+  }
+}
+onUnmounted(() => {
+  if (transcodeTimer) {
+    clearInterval(transcodeTimer);
+    transcodeTimer = null;
+  }
+});
 
 /* ---------- 压缩（保存到服务器）---------- */
 const compressing = ref(false);
@@ -1413,13 +1729,19 @@ function photoUrl(row: any) {
 
 const route = useRoute();
 onMounted(async () => {
-  // 立即加载文件（使用默认存储 ID），存储列表在后台加载
-  // 深链：从收藏页等跳转携带 storage/path 参数时，定位到指定位置
+  // 恢复持久化位置（刷新后回到上次浏览位置），使文件缓存能命中
+  const loc = restoreLocation();
+  // 立即加载文件，存储列表在后台加载
+  // 优先级：深链参数 > 持久化位置 > 默认值
   const qStorage = route.query.storage ? Number(route.query.storage) : null;
   const qPath = route.query.path ? String(route.query.path) : null;
   if (qStorage) storageId.value = qStorage;
+  else if (loc) storageId.value = loc.storageId;
   else if (!storageId.value) storageId.value = 1; // 默认存储
   if (qPath) path.value = qPath;
+  else if (loc) path.value = loc.path;
+  // 先恢复缓存（刷新时瞬间显示上次列表，无骨架闪烁），再后台拉新数据
+  restoreFilesCache();
   // 文件列表立即加载
   load();
   // 存储列表和标签在后台加载，不阻塞文件显示
@@ -1435,6 +1757,8 @@ onMounted(async () => {
   loadAllTags();
   loadFavorites();
   loadQuickAccess();
+  // 恢复未完成的上传队列（断点续传）
+  restoreUploadQueue();
   // 异步加载真实配额用量（非 fast 模式，计算所有存储的 used 之和）
   api('/storages')
     .then((res: any) => {
@@ -1451,7 +1775,14 @@ onMounted(async () => {
     'files-bento': layoutType === 'bento',
     'files-command': layoutType === 'command',
     'files-topnav': layoutType === 'topnav'
-  }">
+  }" @dragenter.prevent="onDragEnter" @dragleave="onDragLeave" @dragover.prevent @drop.prevent="onDrop">
+    <!-- 拖拽上传遮罩 -->
+    <div v-if="dragging" class="drop-overlay">
+      <div class="drop-overlay-inner">
+        <el-icon :size="48"><Upload /></el-icon>
+        <div>松开以上传文件</div>
+      </div>
+    </div>
     <!-- ⌘K 命令面板（仅 command 主题；Meta+K / Ctrl+K 打开，↑↓/Enter/Esc 键盘导航） -->
     <div v-if="layoutType === 'command' && cmdkOpen" class="cmdk-panel">
       <input
@@ -1577,12 +1908,19 @@ onMounted(async () => {
                 <el-icon><PictureFilled /></el-icon>
               </button>
             </div>
-            <!-- 排序 -->
+            <!-- 排序：字段 + 升降序切换 -->
             <el-select v-model="sortKey" class="sort-select" @change="load">
               <el-option value="name" label="名称" />
               <el-option value="size" label="大小" />
               <el-option value="mtime" label="时间" />
             </el-select>
+            <button
+              class="sort-order-btn"
+              :title="sortOrder === 'asc' ? '升序，点击切换为降序' : '降序，点击切换为升序'"
+              @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'; load()"
+            >
+              <el-icon><component :is="sortOrder === 'asc' ? 'Top' : 'Bottom'" /></el-icon>
+            </button>
             <el-button size="small" @click="mkdirDialog = true; mkdirName = ''"><el-icon><FolderAdd /></el-icon>&nbsp;新建文件夹</el-button>
             <el-button size="small" type="primary" @click="pickFiles"><el-icon><Upload /></el-icon>&nbsp;上传文件</el-button>
             <!-- 更多：低频操作收纳（标签 / 刷新 / 多选） -->
@@ -1593,6 +1931,7 @@ onMounted(async () => {
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="tag-filter"><el-icon><PriceTag /></el-icon> 标签筛选</el-dropdown-item>
+                  <el-dropdown-item command="transcode-tasks"><el-icon><Film /></el-icon> 转码任务</el-dropdown-item>
                   <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon> 刷新</el-dropdown-item>
                   <el-dropdown-item command="multi-select"><el-icon><Check /></el-icon> {{ multiSelectMode ? '退出多选' : '多选模式' }}</el-dropdown-item>
                 </el-dropdown-menu>
@@ -1607,6 +1946,26 @@ onMounted(async () => {
             </el-button>
             <el-button v-if="multiSelectMode" size="small" type="warning" :disabled="!selected.length" :loading="compressing" @click="doCompress">
               <el-icon><Box /></el-icon>&nbsp;压缩
+            </el-button>
+            <el-button v-if="multiSelectMode" size="small" :disabled="!selected.length" @click="openBatchMove('move')">
+              <el-icon><Folder /></el-icon>&nbsp;移动选中
+            </el-button>
+            <el-button v-if="multiSelectMode" size="small" :disabled="!selected.length" @click="openBatchMove('copy')">
+              <el-icon><CopyDocument /></el-icon>&nbsp;复制选中
+            </el-button>
+            <el-select
+              v-if="multiSelectMode"
+              v-model="transcodeQuality"
+              size="small"
+              style="width: 90px"
+              :disabled="!selectedHasVideo"
+            >
+              <el-option label="高质量" value="high" />
+              <el-option label="标准" value="standard" />
+              <el-option label="低质量" value="low" />
+            </el-select>
+            <el-button v-if="multiSelectMode" size="small" :disabled="!selectedHasVideo" :loading="transcoding" @click="createTranscodes">
+              <el-icon><Film /></el-icon>&nbsp;转码
             </el-button>
           </div>
           <!-- 平板（768–1199px，F0）：行2 仅留 [搜索][⋯] —— 存储/视图/排序/上传/新建 收进 ⋯ ElPopover -->
@@ -2018,7 +2377,11 @@ onMounted(async () => {
     </el-dialog>
 
     <!-- 移动 / 复制：目录选择器 -->
-    <el-dialog v-model="moveDialog" :title="moveMode === 'move' ? '移动到' : '复制到'" width="520px">
+    <el-dialog
+      v-model="moveDialog"
+      :title="moveBatch ? `${moveMode === 'move' ? '移动' : '复制'} ${moveTargets.length} 个项目` : (moveMode === 'move' ? '移动到' : '复制到')"
+      width="520px"
+    >
       <div class="dir-picker">
         <!-- 面包屑 -->
         <div class="dir-picker-breadcrumb">
@@ -2150,10 +2513,65 @@ onMounted(async () => {
 
     <!-- 上传进度 -->
     <el-dialog v-model="uploadDialog" title="上传进度" width="480px">
-      <div v-for="u in uploads" :key="u.name" class="upload-item">
-        <div class="upload-name">{{ u.name }}</div>
-        <el-progress :percentage="u.percent" :status="u.status === '完成' ? 'success' : u.status === '上传中' ? undefined : 'exception'" :stroke-width="10" />
-        <div class="upload-status">{{ u.status }}</div>
+      <div v-for="u in uploads" :key="u.name + u.size" class="upload-item">
+        <div class="upload-name">{{ u.name }} <span class="upload-size">{{ fmtSize(u.size) }}</span></div>
+        <el-progress
+          :percentage="u.percent"
+          :status="u.status === 'done' ? 'success' : u.status === 'error' ? 'exception' : undefined"
+          :stroke-width="10"
+        />
+        <div class="upload-status">
+          <template v-if="u.status === 'waiting-file'">
+            <span class="upload-status-wait">等待文件（已刷新，需重新选择同名文件以继续）</span>
+            <el-button size="small" type="primary" link @click="resumeUpload(u)">重新选择文件</el-button>
+          </template>
+          <template v-else-if="u.status === 'error'">
+            <span class="upload-status-err">{{ u.error || '上传失败' }}</span>
+            <el-button size="small" type="primary" link @click="retryUpload(u)">重试</el-button>
+          </template>
+          <template v-else>
+            {{ u.status === 'done' ? '已完成' : '上传中…' }}
+          </template>
+          <el-button
+            v-if="u.status !== 'done' && u.status !== 'waiting-file'"
+            size="small"
+            type="danger"
+            link
+            @click="cancelUpload(u)"
+          >取消</el-button>
+        </div>
+      </div>
+      <div v-if="!uploads.length" class="upload-empty">暂无上传任务</div>
+    </el-dialog>
+
+    <!-- 转码任务 -->
+    <el-dialog
+      v-model="transcodeDialog"
+      title="视频转码任务"
+      width="640px"
+      @close="closeTranscodeTasks"
+    >
+      <div class="transcode-rows">
+        <div v-for="t in transcodeTasks" :key="t.id" class="transcode-item">
+          <div class="transcode-name">{{ t.srcPath }} <span class="transcode-quality">→ {{ t.destPath }}</span></div>
+          <el-progress
+            :percentage="t.progress || 0"
+            :status="t.status === 'done' ? 'success' : t.status === 'error' ? 'exception' : undefined"
+            :stroke-width="10"
+          />
+          <div class="transcode-status">
+            <span>{{ t.status === 'done' ? '已完成' : t.status === 'error' ? '失败' : t.status === 'running' ? '转码中…' : '排队中…' }}</span>
+            <span v-if="t.error" class="transcode-err">{{ t.error }}</span>
+            <el-button
+              v-if="t.status === 'queued' || t.status === 'running'"
+              size="small"
+              type="danger"
+              link
+              @click="cancelTranscode(t.id)"
+            >取消</el-button>
+          </div>
+        </div>
+        <div v-if="!transcodeTasks.length" class="upload-empty">暂无转码任务</div>
       </div>
     </el-dialog>
 
@@ -2245,6 +2663,9 @@ onMounted(async () => {
               <el-button size="small" @click="toggleFullscreen" :type="isFullscreen ? 'primary' : 'default'">
                 <el-icon><FullScreen /></el-icon>&nbsp;{{ isFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
+              <el-button size="small" @click="openEditor">
+                <el-icon><Crop /></el-icon>&nbsp;裁剪/压缩
+              </el-button>
             </div>
           </div>
           <!-- 图片信息 -->
@@ -2291,6 +2712,17 @@ onMounted(async () => {
         </div>
       </div>
     </el-dialog>
+
+    <!-- 图片编辑器（裁剪 / 压缩） -->
+    <ImageEditor
+      v-if="editorOpen && editorSrc"
+      :src-url="editorSrc.url"
+      :file-name="editorSrc.name"
+      :storage-id="storageId"
+      :dir-path="path"
+      @close="editorOpen = false"
+      @saved="load()"
+    />
 
     <!-- 压缩包预览 -->
     <el-dialog v-model="archiveDialog" :title="`压缩包内容：${archiveName}`" width="640px">
@@ -2342,6 +2774,7 @@ onMounted(async () => {
 
     <!-- 加密对话框 -->
     <input ref="fileInput" type="file" multiple class="file-picker" @change="onPick" />
+    <input ref="resumeInput" type="file" multiple class="file-picker" @change="onResumePick" />
 
     <!-- 右键上下文菜单 -->
     <div
@@ -2382,7 +2815,7 @@ onMounted(async () => {
           <el-icon><Right /></el-icon> 移动
         </button>
         <button class="ctx-item" @click.stop="ctxAction('copy')">
-          <el-icon><Copy /></el-icon> 复制
+          <el-icon><CopyDocument /></el-icon> 复制
         </button>
         <div class="ctx-sep" />
         <button class="ctx-item ctx-danger" @click.stop="ctxAction('delete')">
@@ -2417,7 +2850,7 @@ onMounted(async () => {
           <el-icon><Right /></el-icon> 移动
         </button>
         <button class="ctx-item" @click.stop="ctxAction('copy')">
-          <el-icon><Copy /></el-icon> 复制
+          <el-icon><CopyDocument /></el-icon> 复制
         </button>
         <button class="ctx-item" @click.stop="ctxAction('props')">
           <el-icon><InfoFilled /></el-icon> 属性
@@ -3269,6 +3702,77 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.upload-size {
+  color: var(--text-secondary);
+  font-weight: normal;
+}
+.upload-status-wait {
+  color: #e6a23c;
+}
+.upload-status-err {
+  color: #f56c6c;
+}
+.upload-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 16px 0;
+}
+.transcode-item {
+  margin-bottom: 14px;
+}
+.transcode-name {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.transcode-quality {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.transcode-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.transcode-err {
+  color: #f56c6c;
+}
+
+/* 拖拽上传遮罩 */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #fff;
+  font-size: 18px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px dashed rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+  padding: 48px 80px;
 }
 
 /* 隐藏但可点击的文件选择器（display:none 会导致 .click() 无法打开选择框） */

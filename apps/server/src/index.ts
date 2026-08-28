@@ -14,6 +14,7 @@ import { ensureRolePermissions } from './services/role.service.js';
 
 import { authRoutes } from './routes/auth.routes.js';
 import { fileRoutes } from './routes/files.routes.js';
+import { mediaRoutes } from './routes/media.routes.js';
 import { uploadRoutes } from './routes/upload.routes.js';
 import { shareRoutes } from './routes/share.routes.js';
 import { userRoutes } from './routes/user.routes.js';
@@ -141,6 +142,7 @@ async function buildApp(): Promise<FastifyInstance> {
   const api = async (instance: FastifyInstance) => {
     await instance.register(authRoutes);
     await instance.register(fileRoutes);
+    await instance.register(mediaRoutes);
     await instance.register(uploadRoutes);
     await instance.register(shareRoutes);
     await instance.register(userRoutes);

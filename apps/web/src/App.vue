@@ -277,6 +277,18 @@ const orderedMainMenu = computed(() => {
   });
 });
 
+/* 侧边栏导航分组（对标主流网盘：文件区 / 分享协作 / 空间工具），组内仍按自定义排序 */
+const NAV_GROUPS: { label: string; paths: Set<string> }[] = [
+  { label: '空间', paths: new Set(['/', '/recent', '/favorites', '/quick-access', '/media', '/hidden']) },
+  { label: '分享协作', paths: new Set(['/subscriptions', '/shares', '/share-collab']) },
+  { label: '更多', paths: new Set(['/recycle', '/profile']) },
+];
+const groupedMainMenu = computed(() =>
+  NAV_GROUPS
+    .map((g) => ({ ...g, items: orderedMainMenu.value.filter((m) => g.paths.has(m.path)) }))
+    .filter((g) => g.items.length > 0)
+);
+
 const orderedAdminMenu = computed(() => {
   const order = adminMenuOrder.value;
   return [...adminMenu.value].sort((a, b) => {
@@ -441,23 +453,28 @@ function applyBackground(s?: any) {
         </div>
 
         <nav class="menu" :class="{ customizing: isCustomizingNav }">
-          <button
-            v-for="item in orderedMainMenu"
-            :key="item.path"
-            class="menu-item"
-            :class="{ active: route.path === item.path, dragging: navDragItem === item.path, 'drag-over': navDragOver === item.path && navDragItem !== item.path }"
-            :title="collapsed ? item.label : undefined"
-            :draggable="isCustomizingNav"
-            @dragstart="onNavDragStart(item.path)"
-            @dragover="onNavDragOver(item.path)"
-            @drop="onNavDrop(item.path)"
-            @dragend="onNavDragEnd"
-            @click="isCustomizingNav ? null : router.push(item.path)"
-          >
-            <el-icon><component :is="item.icon" /></el-icon>
-            <span v-if="!collapsed" class="menu-label">{{ item.label }}</span>
-            <span v-if="isCustomizingNav && !collapsed" class="drag-handle"><el-icon><Rank /></el-icon></span>
-          </button>
+          <!-- 主菜单分组渲染（空间 / 分享协作 / 更多），组内保留拖拽自定义排序 -->
+          <template v-for="group in groupedMainMenu" :key="group.label">
+            <div v-if="!collapsed" class="menu-group">{{ group.label }}</div>
+            <div v-else class="menu-group-line" aria-hidden="true"></div>
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="menu-item"
+              :class="{ active: route.path === item.path, dragging: navDragItem === item.path, 'drag-over': navDragOver === item.path && navDragItem !== item.path }"
+              :title="collapsed ? item.label : undefined"
+              :draggable="isCustomizingNav"
+              @dragstart="onNavDragStart(item.path)"
+              @dragover="onNavDragOver(item.path)"
+              @drop="onNavDrop(item.path)"
+              @dragend="onNavDragEnd"
+              @click="isCustomizingNav ? null : router.push(item.path)"
+            >
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span v-if="!collapsed" class="menu-label">{{ item.label }}</span>
+              <span v-if="isCustomizingNav && !collapsed" class="drag-handle"><el-icon><Rank /></el-icon></span>
+            </button>
+          </template>
 
           <template v-if="isAdmin">
             <div v-if="!collapsed" class="menu-group">系统管理</div>
@@ -638,7 +655,15 @@ function applyBackground(s?: any) {
             <div class="ai-desc">此区域为 AI 文件洞察预留（整理常用内容、媒体库、聚合关键信息等）。该能力尚在规划中，当前未处理任何文件数据。</div>
             <div class="ai-core flow-core"></div>
           </div>
-          <router-view />
+          <!-- keep-alive 缓存已访问页面：切页不销毁组件，返回时数据/滚动位置保留，消除骨架屏闪烁；
+               transition 提供轻柔的页面切换动效（样式见 glass.css .page-fade-*） -->
+          <router-view v-slot="{ Component }">
+            <keep-alive>
+              <transition name="page-fade" mode="out-in">
+                <component :is="Component" />
+              </transition>
+            </keep-alive>
+          </router-view>
         </main>
       </div>
     </div>
@@ -848,6 +873,13 @@ function applyBackground(s?: any) {
   letter-spacing: 0.04em;
   padding: 12px 12px 4px;
 }
+/* 折叠态：分组用细分隔线代替文字标签 */
+.menu-group-line {
+  height: 1px;
+  margin: 8px 10px;
+  background: var(--text-secondary);
+  opacity: 0.18;
+}
 .menu-item {
   display: flex;
   align-items: center;
@@ -1054,6 +1086,8 @@ function applyBackground(s?: any) {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* 浮层使用实心背景，避免半透明玻璃底透出下方内容影响可读性 */
+  background: var(--glass-bg-solid, var(--glass-bg));
 }
 .theme-opt {
   display: flex;

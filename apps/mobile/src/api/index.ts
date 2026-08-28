@@ -35,6 +35,11 @@ export function req(path: string, options: Options = {}): Promise<any> {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(res.data && res.data.data !== undefined ? res.data.data : res.data);
         } else {
+          if (res.statusCode === 401) {
+            uni.removeStorageSync('nebula_token');
+            uni.removeStorageSync('nebula_user');
+            uni.reLaunch({ url: '/pages/login/login' });
+          }
           const msg = (res.data && res.data.error) || 'HTTP ' + res.statusCode;
           reject(new Error(msg));
         }

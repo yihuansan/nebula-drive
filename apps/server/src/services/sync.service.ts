@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import { getDb } from '../db/index.js';
 import { getDriver } from '../storage/registry.js';
@@ -69,11 +70,16 @@ export const syncService = {
       try {
         entries = await driver.list(p);
       } catch {
-        // 远端目录尚不存在（首次同步前）→ 视为空目录
         return;
       }
       for (const e of entries) {
-        const rel = e.path.slice(base.length) || '/';
+        if (base) {
+          const baseWithSlash = base + '/';
+          if (e.path !== base && !e.path.startsWith(baseWithSlash)) {
+            continue;
+          }
+        }
+        const rel = base ? (e.path.slice(base.length) || '/') : '/' + e.path;
         if (e.isDir) await walk(e.path);
         else out.push({ relPath: rel, size: e.size, mtime: e.mtime });
       }
@@ -98,9 +104,20 @@ export const syncService = {
   async pull(token: string, relPath: string): Promise<Readable> {
     const pair = this.byToken(token);
     if (!pair) throw new Error('同步令牌无效');
+    const segments = relPath.split('/').filter(Boolean);
+    if (segments.includes('..')) throw new Error('非法路径');
     const rec = getDb().prepare('SELECT * FROM storages WHERE id = ?').get(pair.storage_id) as any;
     const driver = getDriver(rec);
     const full = pair.remote_path === '/' ? relPath : pair.remote_path + relPath;
+    const bp = pair.remote_path === '/' ? '' : pair.remote_path.replace(/\/$/, '');
+    if (bp) {
+      const normalizedFull = path.normalize(full);
+      const normalizedBp = path.normalize(bp);
+      const bpWithSlash = normalizedBp.endsWith('/') ? normalizedBp : normalizedBp + '/';
+      if (normalizedFull !== normalizedBp && !normalizedFull.startsWith(bpWithSlash)) {
+        throw new Error('非法路径');
+      }
+    }
     opLog(pair.user_id, undefined, 'sync_pull', full);
     return driver.download(full);
   },
@@ -109,9 +126,20 @@ export const syncService = {
   async push(token: string, relPath: string, body: Buffer): Promise<void> {
     const pair = this.byToken(token);
     if (!pair) throw new Error('同步令牌无效');
+    const segments = relPath.split('/').filter(Boolean);
+    if (segments.includes('..')) throw new Error('非法路径');
     const rec = getDb().prepare('SELECT * FROM storages WHERE id = ?').get(pair.storage_id) as any;
     const driver = getDriver(rec);
     const full = pair.remote_path === '/' ? relPath : pair.remote_path + relPath;
+    const bp = pair.remote_path === '/' ? '' : pair.remote_path.replace(/\/$/, '');
+    if (bp) {
+      const normalizedFull = path.normalize(full);
+      const normalizedBp = path.normalize(bp);
+      const bpWithSlash = normalizedBp.endsWith('/') ? normalizedBp : normalizedBp + '/';
+      if (normalizedFull !== normalizedBp && !normalizedFull.startsWith(bpWithSlash)) {
+        throw new Error('非法路径');
+      }
+    }
     await driver.upload(full, Readable.from([body]));
     invalidateCaches(pair.storage_id);
     opLog(pair.user_id, undefined, 'sync_push', full);
@@ -121,9 +149,20 @@ export const syncService = {
   async removeFile(token: string, relPath: string): Promise<void> {
     const pair = this.byToken(token);
     if (!pair) throw new Error('同步令牌无效');
+    const segments = relPath.split('/').filter(Boolean);
+    if (segments.includes('..')) throw new Error('非法路径');
     const rec = getDb().prepare('SELECT * FROM storages WHERE id = ?').get(pair.storage_id) as any;
     const driver = getDriver(rec);
     const full = pair.remote_path === '/' ? relPath : pair.remote_path + relPath;
+    const bp = pair.remote_path === '/' ? '' : pair.remote_path.replace(/\/$/, '');
+    if (bp) {
+      const normalizedFull = path.normalize(full);
+      const normalizedBp = path.normalize(bp);
+      const bpWithSlash = normalizedBp.endsWith('/') ? normalizedBp : normalizedBp + '/';
+      if (normalizedFull !== normalizedBp && !normalizedFull.startsWith(bpWithSlash)) {
+        throw new Error('非法路径');
+      }
+    }
     await driver.delete(full, false);
     invalidateCaches(pair.storage_id);
     opLog(pair.user_id, undefined, 'sync_delete', full);

@@ -513,12 +513,29 @@
 /* ---------------- 空状态 ---------------- */
 .nd-empty {
   margin: 40px 24px;
-  padding: 60px;
+  padding: 48px 60px;
   text-align: center;
   color: var(--text-secondary);
   border-radius: var(--nd-radius);
   background: var(--glass-bg);
   border: 1px dashed var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.nd-empty .el-icon {
+  opacity: 0.5;
+}
+.nd-empty h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.nd-empty p {
+  margin: 0;
+  font-size: 13px;
 }
 
 /* ---------------- 全屏播放器 ---------------- */
@@ -543,7 +560,7 @@
   object-fit: contain;
   background: #000;
 }
-/* 字幕层 */
+/* 字幕层（爱奇艺式：字号/颜色/位置可调，由组件动态控制） */
 .nd-player-subtitle {
   position: absolute;
   left: 50%;
@@ -558,6 +575,11 @@
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
   pointer-events: none;
   white-space: pre-line;
+}
+/* 字幕位置：顶部 */
+.nd-player-subtitle.is-top {
+  bottom: auto;
+  top: 14%;
 }
 /* 顶部信息条 */
 .nd-player-topbar {
@@ -760,6 +782,70 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
   letter-spacing: 1px;
+}
+/* 字幕设置面板 */
+.nd-player-subsettings {
+  min-width: 240px;
+}
+.nd-player-subsettings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  gap: 10px;
+}
+.nd-player-subsettings-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+.nd-player-subsettings-opts {
+  display: flex;
+  gap: 4px;
+}
+.nd-player-subsettings-opt {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  border: none;
+}
+.nd-player-subsettings-opt:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.nd-player-subsettings-opt.is-active {
+  background: var(--accent);
+}
+.nd-player-subsettings-color {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.nd-player-subsettings-color.is-active {
+  border-color: #fff;
+}
+.nd-player-subsettings-back {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 4px;
+}
+.nd-player-subsettings-back:hover {
+  color: #fff;
+}
+/* 字幕菜单"更多"入口 */
+.nd-player-submenu-more {
+  justify-content: space-between;
+  color: rgba(255, 255, 255, 0.7);
+}
+.nd-player-submenu-arrow {
+  font-size: 16px;
 }
 /* 加载 / 错误 */
 .nd-player-loading {

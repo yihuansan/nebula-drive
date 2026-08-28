@@ -386,6 +386,8 @@ async function clearAll() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   padding: 16px 20px;
   margin-bottom: 20px;
   border-radius: 18px;

@@ -7,16 +7,26 @@ import { dirs } from '../config.js';
  * 文件版本服务：覆盖上传时保留旧版本，支持列表 / 恢复 / 删除版本。
  * 版本文件存放在 storage/.versions/<storageId>/<hash> 下。
  */
+function validateFilePath(filePath: string): void {
+  if (filePath.includes('../') || filePath.includes('..\\')) {
+    throw new Error('非法路径');
+  }
+  const normalized = path.normalize(filePath);
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.includes('..')) {
+    throw new Error('非法路径');
+  }
+}
+
 export const versionService = {
   /** 保存一个版本（覆盖前调用） */
   save(storageId: number, filePath: string, oldPath: string, size: number, mtime: string): number {
+    validateFilePath(filePath);
     const db = getDb();
-    // 查当前最大版本号
     const row = db
       .prepare('SELECT MAX(version) AS v FROM file_versions WHERE storage_id = ? AND path = ?')
       .get(storageId, filePath) as { v: number | null };
     const nextVersion = (row.v || 0) + 1;
-    // 复制文件到版本目录
     const hash = Buffer.from(filePath).toString('hex');
     const verDir = path.join(dirs.storageRoot, '.versions', String(storageId));
     fs.mkdirSync(verDir, { recursive: true });
@@ -37,24 +47,31 @@ export const versionService = {
 
   /** 恢复某版本 */
   restore(storageId: number, filePath: string, version: number): string {
+    validateFilePath(filePath);
     const db = getDb();
     const row = db
       .prepare('SELECT * FROM file_versions WHERE storage_id = ? AND path = ? AND version = ?')
       .get(storageId, filePath, version) as any;
     if (!row) throw new Error('版本不存在');
-    // 先保存当前文件的版本
-    const currentPath = path.join(dirs.storageRoot, filePath);
+    const storageRoot = dirs.storageRoot;
+    const currentPath = path.join(storageRoot, filePath);
+    const normalizedCurrent = path.normalize(currentPath);
+    const normalizedRoot = path.normalize(storageRoot);
+    const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
+    if (normalizedCurrent !== normalizedRoot && !normalizedCurrent.startsWith(rootWithSep)) {
+      throw new Error('非法路径');
+    }
     if (fs.existsSync(currentPath)) {
       const stat = fs.statSync(currentPath);
       this.save(storageId, filePath, currentPath, stat.size, new Date(stat.mtime).toISOString());
     }
-    // 恢复版本文件
     fs.copyFileSync(row.blob_path, currentPath);
     return currentPath;
   },
 
   /** 删除某版本 */
   remove(storageId: number, filePath: string, version: number) {
+    validateFilePath(filePath);
     const db = getDb();
     const row = db
       .prepare('SELECT * FROM file_versions WHERE storage_id = ? AND path = ? AND version = ?')

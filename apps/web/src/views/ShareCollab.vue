@@ -21,20 +21,26 @@ const activityDialog = ref(false);
 const activities = ref<any[]>([]);
 
 async function loadCreated() {
+  loading.value = true;
   try {
     const r = await api('/share-collab');
     createdItems.value = r.items;
   } catch (e: any) {
     ElMessage.error(e.message || '加载失败');
+  } finally {
+    loading.value = false;
   }
 }
 
 async function loadReceived() {
+  loading.value = true;
   try {
     const r = await api('/share-collab/received');
     receivedItems.value = r.items;
   } catch (e: any) {
     ElMessage.error(e.message || '加载失败');
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -136,7 +142,7 @@ onMounted(() => {
 
 <template>
   <div class="share-collab-page">
-    <div class="page-header">
+    <div class="page-header glass">
       <h2>共享管理</h2>
     </div>
 
@@ -148,7 +154,7 @@ onMounted(() => {
           <p>暂无共享</p>
           <p class="tip">在文件管理中右键文件/文件夹，选择「共享给用户」创建共享</p>
         </div>
-        <el-table v-else :data="createdItems" style="width: 100%">
+        <el-table v-else :data="createdItems" v-loading="loading" style="width: 100%">
           <el-table-column prop="name" label="名称" min-width="160" />
           <el-table-column prop="path" label="路径" min-width="200" />
           <el-table-column label="接收者" width="100">
@@ -177,7 +183,7 @@ onMounted(() => {
           <el-icon :size="64"><Folder /></el-icon>
           <p>暂无共享给我的内容</p>
         </div>
-        <el-table v-else :data="receivedItems" style="width: 100%">
+        <el-table v-else :data="receivedItems" v-loading="loading" style="width: 100%">
           <el-table-column prop="name" label="名称" min-width="160" />
           <el-table-column prop="path" label="路径" min-width="200" />
           <el-table-column label="权限" width="120">

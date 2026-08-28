@@ -166,10 +166,17 @@ export class State {
   }
 
   saveBase(pairId: number, base: Map<string, FileState>): void {
-    this.db.prepare('DELETE FROM manifest WHERE pair_id = ?').run(pairId);
-    const ins = this.db.prepare('INSERT OR REPLACE INTO manifest (pair_id, rel_path, size, mtime, hash) VALUES (?, ?, ?, ?, ?)');
-    for (const [rel, s] of base) {
-      ins.run(pairId, rel, s.size, s.mtime, s.hash ?? null);
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('DELETE FROM manifest WHERE pair_id = ?').run(pairId);
+      const ins = this.db.prepare('INSERT OR REPLACE INTO manifest (pair_id, rel_path, size, mtime, hash) VALUES (?, ?, ?, ?, ?)');
+      for (const [rel, s] of base) {
+        ins.run(pairId, rel, s.size, s.mtime, s.hash ?? null);
+      }
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
     }
   }
 

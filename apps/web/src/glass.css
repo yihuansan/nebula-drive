@@ -1147,6 +1147,22 @@
 }
 
 /* ============================================================
+   浮层实心背景（--glass-bg-solid）
+   用于悬浮面板（如主题选择器）：半透明玻璃底会透出下方内容，
+   浮层需近似不透明背景以保证可读性，同时保留各主题色调。
+   ============================================================ */
+[data-theme='light-glass'] { --glass-bg-solid: rgba(255, 255, 255, 0.94); }
+[data-theme='dark-glass'] { --glass-bg-solid: rgba(15, 21, 38, 0.96); }
+[data-theme='silver'] { --glass-bg-solid: rgba(255, 255, 255, 0.94); }
+[data-theme='dashboard'] { --glass-bg-solid: rgba(17, 26, 42, 0.96); }
+[data-theme='forest'] { --glass-bg-solid: rgba(255, 255, 255, 0.94); }
+[data-theme='aurora'] { --glass-bg-solid: rgba(10, 16, 28, 0.96); }
+[data-theme='sunset'] { --glass-bg-solid: rgba(255, 255, 255, 0.94); }
+[data-theme='stardust'] { --glass-bg-solid: rgba(13, 15, 30, 0.96); }
+[data-theme='dawn'] { --glass-bg-solid: rgba(255, 255, 255, 0.96); }
+[data-theme='flow'] { --glass-bg-solid: rgba(12, 12, 20, 0.96); }
+
+/* ============================================================
    玻璃工具类
    ============================================================ */
 .glass {
@@ -1444,4 +1460,147 @@ body {
 /* ---------- 消息提示跟随主题 ---------- */
 .el-message {
   border-radius: 14px;
+}
+
+/* ============================================================
+   全局视觉升级（2026）
+   统一设计令牌 / Element Plus 变量映射 / 排版节奏 / 微交互 /
+   页面过渡 / 空状态与浮层精修 —— 全部由主题变量驱动，所有主题自动适配
+   ============================================================ */
+
+/* ---------- 设计令牌：统一缓动曲线 ---------- */
+:root {
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ---------- Element Plus 变量映射：组件主色跟随主题 accent ----------
+   EP 内部所有 primary 派生色（hover/active/浅底）由 light-N/dark-N 生成，
+   这里用 color-mix 基于 --accent 推导，保证按钮/开关/复选/分页等全局一致 */
+:root {
+  --el-color-primary: var(--accent);
+  --el-color-primary-light-3: color-mix(in srgb, var(--accent) 70%, #ffffff);
+  --el-color-primary-light-5: color-mix(in srgb, var(--accent) 50%, #ffffff);
+  --el-color-primary-light-7: color-mix(in srgb, var(--accent) 30%, #ffffff);
+  --el-color-primary-light-8: color-mix(in srgb, var(--accent) 20%, #ffffff);
+  --el-color-primary-light-9: color-mix(in srgb, var(--accent) 12%, #ffffff);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--accent) 80%, #000000);
+  --el-border-radius-base: 10px;
+}
+
+/* ---------- 排版节奏：正文基准 + 选中色 ---------- */
+body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* ---------- 键盘焦点环（可访问性，不干扰鼠标操作） ---------- */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+/* ---------- 按钮：统一微交互（叠加式，不覆盖各主题自定颜色） ---------- */
+.el-button {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: all 0.25s var(--ease-smooth);
+}
+.el-button:not(.is-disabled):not(.is-loading):hover {
+  transform: translateY(-1px);
+}
+.el-button:not(.is-disabled):not(.is-loading):active {
+  transform: translateY(0) scale(0.97);
+}
+/* 主按钮：主题色柔光，强化层次 */
+.el-button--primary:not(.is-link):not(.is-text) {
+  box-shadow: 0 4px 14px var(--accent-soft);
+}
+.el-button--primary:not(.is-link):not(.is-text):hover {
+  box-shadow: 0 8px 22px var(--accent-soft);
+}
+
+/* ---------- 表格：表头字重 + 行 hover 过渡 ---------- */
+.el-table__header th.el-table__cell {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-size: 13px;
+}
+.el-table__body tr {
+  transition: background-color 0.2s var(--ease-smooth);
+}
+
+/* ---------- 弹窗：标题层级 + 关闭按钮微交互 ---------- */
+.el-dialog__header {
+  padding-bottom: 4px;
+  margin-right: 0;
+}
+.el-dialog__title {
+  font-size: 16px;
+  letter-spacing: 0.01em;
+}
+.el-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: var(--text-secondary);
+  transition: color 0.2s var(--ease-smooth), transform 0.25s var(--ease-smooth);
+}
+.el-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: var(--text);
+  transform: rotate(90deg);
+}
+
+/* ---------- 确认框（ElMessageBox）：与 el-dialog 同质感 ---------- */
+.el-message-box {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  color: var(--text);
+}
+[data-theme='dark-glass'] .el-message-box {
+  background: rgba(18, 22, 42, 0.86);
+}
+.el-message-box__title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------- 空状态：柔和图标 + 次级文字 ---------- */
+.el-empty {
+  padding: 36px 0;
+}
+.el-empty__description p {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.el-empty__icon svg {
+  fill: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+/* ---------- 分页 / 标签：细节统一 ---------- */
+.el-pager li {
+  border-radius: 8px;
+  font-weight: 500;
+}
+.el-pager li:not(.is-active):hover {
+  color: var(--accent);
+}
+.el-tag {
+  font-weight: 500;
+}
+
+/* ---------- 页面切换过渡（App.vue router-view 使用） ---------- */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.28s var(--ease-smooth), transform 0.28s var(--ease-smooth);
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }

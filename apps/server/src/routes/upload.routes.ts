@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
+import fs from 'node:fs';
+import path from 'node:path';
 import { requirePermission, ok, fail } from '../auth/middleware.js';
 import { uploadService } from '../services/upload.service.js';
 import { settingNum } from '../services/settings.service.js';
+import { getDb } from '../db/index.js';
+import { dirs } from '../config.js';
+import { fileIndex } from '../services/fileIndex.service.js';
+import { usageCache } from '../services/usageCache.service.js';
 
 /** 单文件大小上限（字节）；0 = 不限制 */
 function maxFileSizeBytes(): number {
@@ -21,8 +27,9 @@ async function readMultipart(req: any): Promise<{ data: Buffer; fields: Record<s
   let filename = '';
   for await (const p of req.parts()) {
     if (p.type === 'file') {
+      const buf = await p.toBuffer();
       if (!data) {
-        data = await p.toBuffer();
+        data = buf;
         filename = p.filename || '';
       }
     } else if (p.type === 'field') {
@@ -82,6 +89,54 @@ export async function uploadRoutes(app: FastifyInstance) {
     }
   });
 
+  /** 查询上传会话状态（断点续传：返回已收到的分片序号，前端跳过已传分片） */
+  app.get('/upload/status', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const q = req.query as { uploadId?: string };
+    const st = uploadService.status(q.uploadId || '', req.user!.sub);
+    if (!st) return fail(reply, 404, '上传会话不存在');
+    return ok(reply, st);
+  });
+
+  /** 列出当前用户未完成的上传会话（页面刷新后恢复上传队列） */
+  app.get('/uploads', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    try {
+      const rows = getDb().prepare('SELECT * FROM upload_sessions WHERE user_id = ? AND status = ? ORDER BY created_at DESC').all(req.user!.sub, 'uploading') as any[];
+      return ok(reply, rows.map((r) => ({
+        uploadId: r.upload_id,
+        storageId: r.storage_id,
+        name: r.name,
+        destPath: r.dest_path,
+        size: r.size,
+        chunkSize: r.chunk_size,
+        createdAt: r.created_at,
+      })));
+    } catch (e: any) {
+      return fail(reply, 500, e?.message || '查询上传会话失败');
+    }
+  });
+
+  /** 放弃上传会话（删除临时分片与元数据） */
+  app.delete('/upload/:uploadId', { preHandler: requirePermission('files:write') }, async (req, reply) => {
+    const st = uploadService.status((req.params as any).uploadId, req.user!.sub);
+    if (!st) return fail(reply, 404, '上传会话不存在');
+    const db = getDb();
+    try {
+      const row = db.prepare('SELECT storage_id FROM upload_sessions WHERE upload_id = ?').get((req.params as any).uploadId) as any;
+      db.prepare('DELETE FROM upload_sessions WHERE upload_id = ?').run((req.params as any).uploadId);
+      const dir = path.join(dirs.uploads, (req.params as any).uploadId);
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      if (row) {
+        try {
+          fileIndex.markDirty(row.storage_id);
+          usageCache.invalidate(row.storage_id);
+        } catch { /* 忽略 */ }
+      }
+      return ok(reply, { ok: true });
+    } catch (e: any) {
+      return fail(reply, 400, e?.message || '取消上传失败');
+    }
+  });
+
   app.post('/upload/complete', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const b = req.body as { uploadId: string };
     try {
@@ -100,6 +155,8 @@ export async function uploadRoutes(app: FastifyInstance) {
       if (maxBytes > 0 && r.data.length > maxBytes) {
         return fail(reply, 400, `超出单文件大小上限（${settingNum('maxFileSizeGB', 0)} GB）`);
       }
+      const effectiveMax = maxBytes > 0 ? maxBytes : 500 * 1024 * 1024;
+      if (r.data.length > effectiveMax) return fail(reply, 400, '单文件超过上限（500MB）');
       const storageId = Number(r.fields.storageId);
       const p = r.fields.path || '';
       const name = r.filename || r.fields.name || 'file';

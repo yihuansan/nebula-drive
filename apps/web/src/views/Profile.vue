@@ -423,7 +423,10 @@ onMounted(async () => {
               </template>
             </el-table-column>
           </el-table>
-          <div v-if="!loginHistory.length" class="empty-tip">暂无登录记录</div>
+          <div v-if="!loginHistory.length" class="empty-tip">
+            <el-icon :size="28"><Clock /></el-icon>
+            <span>暂无登录记录</span>
+          </div>
         </div>
 
         <!-- 存储用量 -->
@@ -454,7 +457,10 @@ onMounted(async () => {
             <span class="search-history-query">{{ h.query }}</span>
             <span class="search-history-time">{{ fmtTime(h.created_at) }}</span>
           </div>
-          <div v-if="!searchHistory.length" class="empty-tip">暂无搜索记录</div>
+          <div v-if="!searchHistory.length" class="empty-tip">
+            <el-icon :size="28"><Search /></el-icon>
+            <span>暂无搜索记录</span>
+          </div>
         </div>
 
         <!-- 2FA 双因素认证 -->
@@ -486,7 +492,10 @@ onMounted(async () => {
             </el-button>
           </h2>
           <div v-if="sessionsLoading" class="empty-tip">加载中...</div>
-          <div v-else-if="!sessions.length" class="empty-tip">暂无设备记录</div>
+          <div v-else-if="!sessions.length" class="empty-tip">
+            <el-icon :size="28"><Monitor /></el-icon>
+            <span>暂无设备记录</span>
+          </div>
           <div v-else>
             <div v-for="s in sessions" :key="s.id" class="session-item">
               <div class="session-info">
@@ -613,6 +622,11 @@ onMounted(async () => {
   max-width: 1200px;
   width: 100%;
 }
+@media (max-width: 900px) {
+  .profile-layout {
+    grid-template-columns: 1fr;
+  }
+}
 .profile-card {
   border-radius: 20px;
   padding: 20px;
@@ -690,9 +704,17 @@ onMounted(async () => {
 }
 .empty-tip {
   text-align: center;
-  padding: 20px 0;
+  padding: 24px 0;
   color: var(--text-secondary);
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.empty-tip .el-icon {
+  color: var(--text-secondary);
+  opacity: 0.6;
 }
 
 /* 2FA 样式 */

@@ -8,6 +8,10 @@ import {
   generateRecoveryCodes,
   getOtpAuthUri,
 } from '../services/totp.service.js';
+import { encryptField, decryptFieldIfEncrypted } from '../utils/crypto.js';
+
+/** 2FA secret 加密入库；读取时解密（兼容历史明文） */
+const plainSecret = (row: any): string => decryptFieldIfEncrypted(row?.secret || '');
 
 export async function twoFactorRoutes(app: FastifyInstance) {
   /** 获取用户 2FA 状态 */
@@ -17,7 +21,7 @@ export async function twoFactorRoutes(app: FastifyInstance) {
     if (!row) return ok(reply, { enabled: false });
     return ok(reply, {
       enabled: !!row.enabled,
-      secret: row.enabled ? '' : row.secret, // 未启用时返回 secret 供前端显示
+      secret: row.enabled ? '' : plainSecret(row), // 未启用时返回 secret 供前端显示
     });
   });
 
@@ -38,9 +42,9 @@ export async function twoFactorRoutes(app: FastifyInstance) {
 
     if (existing) {
       db.prepare('UPDATE user_2fa SET secret = ?, enabled = 0, updated_at = datetime(\'now\') WHERE user_id = ?')
-        .run(secret, userId);
+        .run(encryptField(secret), userId);
     } else {
-      db.prepare('INSERT INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 0)').run(userId, secret);
+      db.prepare('INSERT INTO user_2fa (user_id, secret, enabled) VALUES (?, ?, 0)').run(userId, encryptField(secret));
     }
 
     // 生成 QR 码 data URL
@@ -60,7 +64,7 @@ export async function twoFactorRoutes(app: FastifyInstance) {
     if (!row) return fail(reply, 400, '请先启用 2FA');
 
     // 验证代码
-    if (!verifyCode(row.secret, parseInt(code, 10))) {
+    if (!verifyCode(plainSecret(row), parseInt(code, 10))) {
       return fail(reply, 400, '验证码错误');
     }
 
@@ -82,7 +86,7 @@ export async function twoFactorRoutes(app: FastifyInstance) {
     if (!row?.enabled) return fail(reply, 400, '2FA 未启用');
 
     // 需要验证当前代码才能禁用
-    if (!verifyCode(row.secret, parseInt(code || '0', 10))) {
+    if (!verifyCode(plainSecret(row), parseInt(code || '0', 10))) {
       return fail(reply, 400, '验证码错误，无法禁用');
     }
 
@@ -114,7 +118,7 @@ export async function twoFactorRoutes(app: FastifyInstance) {
     if (!row) return fail(reply, 400, '2FA 未启用');
 
     // 先检查 TOTP 代码
-    if (verifyCode(row.secret, parseInt(code, 10))) {
+    if (verifyCode(plainSecret(row), parseInt(code, 10))) {
       return ok(reply, { verified: true, method: 'totp' });
     }
 

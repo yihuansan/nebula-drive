@@ -30,6 +30,8 @@ const rootRef = ref<HTMLElement | null>(null);
 const videoRef = ref<HTMLVideoElement | null>(null);
 const progressRef = ref<HTMLElement | null>(null);
 
+// 原生流式播放：<video> 自动发 Range 请求（206 分片），配合服务端 faststart（moov 前置）边下边播。
+// 注意：不要用 fetch 整包下载成 blob 再播——大视频会先下完全片才能开播，且撑爆浏览器内存。
 const src = computed(() => previewUrl(props.storageId, props.item.path, props.token));
 
 const currentTime = ref(0);
@@ -45,7 +47,13 @@ const error = ref('');
 const hovered = ref(false);
 const showSpeedMenu = ref(false);
 const showSubmenu = ref(false);
+const showSubSettings = ref(false); // 字幕设置面板
 const subIndex = ref(0); // 0 = 关闭字幕，1..n = 轨道
+// 字幕样式（爱奇艺式可调）
+const subSize = ref(2); // 1=小 2=中 3=大
+const subColor = ref('#ffffff'); // 字幕颜色
+const subPos = ref<'bottom' | 'top'>('bottom'); // 字幕位置
+const subOffset = ref(0); // 字幕时间偏移（秒），正=延后 负=提前
 
 let hideTimer: number | undefined;
 let lastEmit = 0;
@@ -54,9 +62,17 @@ const activeTrack = computed<SubtitleTrack | null>(() =>
   subIndex.value > 0 ? props.subtitles[subIndex.value - 1] || null : null,
 );
 
+// 字幕字号（px），根据 subSize 和全屏状态自适应
+const subSizePx = computed(() => {
+  const base = [20, 26, 34][subSize.value - 1] || 26;
+  // 全屏时放大
+  return isFullscreen.value ? Math.round(base * 1.4) : base;
+});
+
 const currentCue = computed<SubtitleCue | null>(() => {
   if (!activeTrack.value) return null;
-  return cueAtTime(activeTrack.value.cues, currentTime.value);
+  // 应用时间偏移
+  return cueAtTime(activeTrack.value.cues, currentTime.value + subOffset.value);
 });
 
 const pct = computed(() => (duration.value ? (currentTime.value / duration.value) * 100 : 0));
@@ -71,6 +87,11 @@ function togglePlay() {
   else v.pause();
 }
 
+function retry() {
+  error.value = '';
+  videoRef.value?.load();
+}
+
 function onLoadedMetadata() {
   loading.value = false;
   const v = videoRef.value;
@@ -78,6 +99,21 @@ function onLoadedMetadata() {
   if (props.initialTime && props.initialTime > 0 && props.initialTime < v.duration) {
     v.currentTime = props.initialTime;
   }
+}
+
+function onVideoError(e: Event) {
+  const v = e.target as HTMLVideoElement;
+  const code = v.error?.code;
+  const msgs: Record<number, string> = {
+    1: '媒体资源被中止',
+    2: '网络下载错误',
+    3: '解码失败（编码不支持）',
+    4: '媒体资源未找到',
+  };
+  const detail = code ? msgs[code] || `错误码 ${code}` : '未知错误';
+  error.value = `无法播放该视频（${detail}）`;
+  // 同时输出到控制台方便诊断
+  console.error('[VideoPlayer] error:', { code, msg: v.error?.message, src: v.src });
 }
 
 function onTimeUpdate() {
@@ -255,11 +291,16 @@ const speedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
         @ended="onPause"
         @canplay="loading = false"
         @waiting="loading = true"
-        @error="error = '无法播放该视频'"
+        @error="onVideoError"
       ></video>
 
-      <!-- 字幕 -->
-      <div v-if="currentCue" class="nd-player-subtitle">{{ currentCue.text }}</div>
+      <!-- 字幕（爱奇艺式：字号/颜色/位置可调） -->
+      <div
+        v-if="currentCue"
+        class="nd-player-subtitle"
+        :class="{ 'is-top': subPos === 'top' }"
+        :style="{ fontSize: subSizePx + 'px', color: subColor }"
+      >{{ currentCue.text }}</div>
 
       <!-- 顶部信息 -->
       <div class="nd-player-topbar">
@@ -287,7 +328,7 @@ const speedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
       <div v-if="error" class="nd-player-error">
         <el-icon :size="48"><VideoCamera /></el-icon>
         <span>{{ error }}</span>
-        <button @click="error = ''; videoRef && (videoRef.src = src)">重试</button>
+        <button @click="retry">重试</button>
       </div>
     </div>
 
@@ -361,7 +402,7 @@ const speedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
     </div>
 
     <!-- 字幕菜单 -->
-    <div v-if="showSubmenu" class="nd-player-submenu">
+    <div v-if="showSubmenu && !showSubSettings" class="nd-player-submenu">
       <div class="nd-player-submenu-label">字幕</div>
       <div class="nd-player-submenu-item" :class="{ 'is-active': subIndex === 0 }" @click="selectSub(0)">
         关闭
@@ -375,6 +416,61 @@ const speedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
       >
         {{ t.label }}
       </div>
+      <!-- 字幕设置入口 -->
+      <div class="nd-player-submenu-item nd-player-submenu-more" @click="showSubSettings = true">
+        字幕设置 <span class="nd-player-submenu-arrow">›</span>
+      </div>
+    </div>
+
+    <!-- 字幕设置面板（字号/颜色/位置/时间偏移） -->
+    <div v-if="showSubSettings" class="nd-player-submenu nd-player-subsettings">
+      <div class="nd-player-submenu-label">字幕设置</div>
+      <!-- 字号 -->
+      <div class="nd-player-subsettings-row">
+        <span class="nd-player-subsettings-label">字号</span>
+        <div class="nd-player-subsettings-opts">
+          <button
+            v-for="(label, i) in ['小', '中', '大']"
+            :key="i"
+            class="nd-player-subsettings-opt"
+            :class="{ 'is-active': subSize === i + 1 }"
+            @click="subSize = i + 1"
+          >{{ label }}</button>
+        </div>
+      </div>
+      <!-- 颜色 -->
+      <div class="nd-player-subsettings-row">
+        <span class="nd-player-subsettings-label">颜色</span>
+        <div class="nd-player-subsettings-opts">
+          <button
+            v-for="c in ['#ffffff', '#fffd3f', '#00e676', '#ff5252']"
+            :key="c"
+            class="nd-player-subsettings-opt nd-player-subsettings-color"
+            :class="{ 'is-active': subColor === c }"
+            :style="{ background: c }"
+            @click="subColor = c"
+          ></button>
+        </div>
+      </div>
+      <!-- 位置 -->
+      <div class="nd-player-subsettings-row">
+        <span class="nd-player-subsettings-label">位置</span>
+        <div class="nd-player-subsettings-opts">
+          <button class="nd-player-subsettings-opt" :class="{ 'is-active': subPos === 'bottom' }" @click="subPos = 'bottom'">底部</button>
+          <button class="nd-player-subsettings-opt" :class="{ 'is-active': subPos === 'top' }" @click="subPos = 'top'">顶部</button>
+        </div>
+      </div>
+      <!-- 时间偏移 -->
+      <div class="nd-player-subsettings-row">
+        <span class="nd-player-subsettings-label">时间</span>
+        <div class="nd-player-subsettings-opts">
+          <button class="nd-player-subsettings-opt" @click="subOffset = Math.max(-30, subOffset - 1)">-1s</button>
+          <button class="nd-player-subsettings-opt" :class="{ 'is-active': subOffset === 0 }" @click="subOffset = 0">{{ subOffset === 0 ? '正常' : (subOffset > 0 ? `+${subOffset}s` : `${subOffset}s`) }}</button>
+          <button class="nd-player-subsettings-opt" @click="subOffset = Math.min(30, subOffset + 1)">+1s</button>
+        </div>
+      </div>
+      <!-- 返回 -->
+      <div class="nd-player-subsettings-back" @click="showSubSettings = false">‹ 返回字幕列表</div>
     </div>
   </div>
 </template>

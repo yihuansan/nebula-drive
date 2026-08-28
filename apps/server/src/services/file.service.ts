@@ -117,6 +117,24 @@ export const fileService = {
     }
   },
 
+  /** 批量移动：destPath 为目标目录，逐项移动到 destDir + basename */
+  async batchMove(storageId: number, paths: string[], destPath: string, user?: { username: string; id?: number }) {
+    const destDir = destPath.endsWith('/') ? destPath : destPath + '/';
+    for (const p of paths) {
+      const base = p.split('/').filter(Boolean).pop() || '';
+      await this.move(storageId, p, destDir + base, user);
+    }
+  },
+
+  /** 批量复制：destPath 为目标目录，逐项复制到 destDir + basename */
+  async batchCopy(storageId: number, paths: string[], destPath: string, user?: { username: string; id?: number }) {
+    const destDir = destPath.endsWith('/') ? destPath : destPath + '/';
+    for (const p of paths) {
+      const base = p.split('/').filter(Boolean).pop() || '';
+      await this.copy(storageId, p, destDir + base, user);
+    }
+  },
+
   async search(
     q: string,
     storageId?: number,

@@ -2,6 +2,10 @@ import crypto from 'node:crypto';
 
 /** 登录失败次数追踪（内存存储，进程重启后清零） */
 const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+/** 失败计数时间窗口：15 分钟，窗口外计数重置 */
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+/** 登录失败 Map 容量上限，防止内存无限增长 */
+const MAX_FAILURE_ENTRIES = 1000;
 
 /** 验证码存储（内存存储，5 分钟过期） */
 const captchaStore = new Map<string, { code: string; expires: number }>();
@@ -72,12 +76,23 @@ export function verifyCaptcha(id: string, code: string): boolean {
   return true;
 }
 
-/** 记录登录失败 */
+/** 记录登录失败（超过时间窗口则计数重置；Map 超限时淘汰最旧条目） */
 export function recordLoginFailure(username: string): number {
   const key = username.toLowerCase();
+  const now = Date.now();
   const entry = loginAttempts.get(key);
-  const count = (entry?.count || 0) + 1;
-  loginAttempts.set(key, { count, lastAttempt: Date.now() });
+  // 距离上次失败超过窗口 → 视为新一轮尝试
+  const count = entry && now - entry.lastAttempt < FAILURE_WINDOW_MS ? entry.count + 1 : 1;
+  if (!loginAttempts.has(key) && loginAttempts.size >= MAX_FAILURE_ENTRIES) {
+    // 容量上限：淘汰最旧的条目
+    let oldestKey = '';
+    let oldestTs = Infinity;
+    for (const [k, v] of loginAttempts) {
+      if (v.lastAttempt < oldestTs) { oldestTs = v.lastAttempt; oldestKey = k; }
+    }
+    if (oldestKey) loginAttempts.delete(oldestKey);
+  }
+  loginAttempts.set(key, { count, lastAttempt: now });
   return count;
 }
 
@@ -86,17 +101,24 @@ export function clearLoginFailures(username: string): void {
   loginAttempts.delete(username.toLowerCase());
 }
 
-/** 获取某用户的失败次数 */
+/** 获取某用户的失败次数（超出时间窗口视为 0） */
 export function getFailureCount(username: string): number {
-  return loginAttempts.get(username.toLowerCase())?.count || 0;
+  const entry = loginAttempts.get(username.toLowerCase());
+  if (!entry) return 0;
+  return Date.now() - entry.lastAttempt < FAILURE_WINDOW_MS ? entry.count : 0;
 }
 
-/** 清理过期的验证码（定期调用） */
+/** 清理过期的验证码与失败记录（定期调用） */
 export function cleanupCaptchas(): void {
   const now = Date.now();
   for (const [id, entry] of captchaStore) {
     if (now > entry.expires) {
       captchaStore.delete(id);
+    }
+  }
+  for (const [key, entry] of loginAttempts) {
+    if (now - entry.lastAttempt >= FAILURE_WINDOW_MS) {
+      loginAttempts.delete(key);
     }
   }
 }

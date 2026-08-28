@@ -59,6 +59,11 @@ export function downloadUrl(storageId: number, path: string, token: string): str
   return `/api/v1/files/download?storageId=${storageId}&path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`;
 }
 
+/** 服务端海报 URL（ffmpeg 抽帧，返回 JPEG；不受浏览器 moov 位置影响） */
+export function serverPosterUrl(storageId: number, path: string, token: string): string {
+  return `/api/v1/files/poster?storageId=${storageId}&path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`;
+}
+
 /* ---------------- 客户端海报抓取（seek ~8% → canvas → dataURL） ---------------- */
 
 const POSTER_KEY = 'nebula_posters_v1';
@@ -114,18 +119,48 @@ function persistPosterCache(cache: PosterCache): void {
 }
 
 /**
- * 抓取视频海报帧 + 时长。失败返回 null（调用方用渐变占位）。
+ * 从服务端拉取海报 JPEG → dataURL。
+ * 服务端用 ffmpeg 抽帧（seek 8%、缩放 480p），按 storageId+path+mtime+size 缓存。
+ * 失败（非 200 / 非 JPEG / 网络错 / 超时）返回 null，由调用方回退到 canvas 捕获。
  */
-export function capturePoster(
+async function fetchServerPoster(
   storageId: number,
   path: string,
   token: string,
-  timeoutMs = 12000,
+  timeoutMs: number,
 ): Promise<PosterEntry | null> {
-  const key = posterKey(storageId, path);
-  const cached = getCachedPoster(key);
-  if (cached) return Promise.resolve(cached);
+  const url = serverPosterUrl(storageId, path, token);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.type !== 'image/jpeg' || blob.size < 100) return null;
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result as string);
+      fr.onerror = () => reject(new Error('read failed'));
+      fr.readAsDataURL(blob);
+    });
+    return { dataUrl, at: Date.now() };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
+/**
+ * 浏览器端海报抓取（seek ~8% → canvas → dataURL）。
+ * 对非 faststart 视频（moov 在文件尾部）可能失败，作为服务端海报的兜底。
+ */
+function capturePosterCanvas(
+  storageId: number,
+  path: string,
+  token: string,
+  timeoutMs: number,
+): Promise<PosterEntry | null> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     let settled = false;
@@ -151,8 +186,9 @@ export function capturePoster(
 
     video.onloadedmetadata = () => {
       const duration = Number.isFinite(video.duration) ? video.duration : undefined;
-      // 目标时间点：8%，最少 1s，最多一半
-      const target = duration ? Math.min(Math.max(duration * 0.08, 1), duration * 0.5) : 3;
+      // 目标时间点：8%，最少 1s，最多 10s（大文件/非 faststart 的 moov 在文件尾部，
+      //  seek 越靠后需下载的数据越多；限制在前 10s 可大幅降低抓取成本与超时概率）
+      const target = duration ? Math.min(Math.max(duration * 0.08, 1), 10) : 3;
       try {
         video.currentTime = target;
       } catch {
@@ -183,7 +219,7 @@ export function capturePoster(
           h: video.videoHeight,
           at: Date.now(),
         };
-        savePoster(key, entry);
+        savePoster(posterKey(storageId, path), entry);
         finish(entry);
       } catch {
         // canvas 被污染或绘制失败 → 无海报
@@ -193,6 +229,32 @@ export function capturePoster(
 
     video.onerror = () => finish(null);
   });
+}
+
+/**
+ * 抓取视频海报帧。优先走服务端 ffmpeg 抽帧（可靠，不受浏览器 moov 位置影响），
+ * 失败回退到浏览器 canvas 捕获。失败返回 null（调用方用渐变占位）。
+ */
+export function capturePoster(
+  storageId: number,
+  path: string,
+  token: string,
+  timeoutMs = 30000,
+): Promise<PosterEntry | null> {
+  const key = posterKey(storageId, path);
+  const cached = getCachedPoster(key);
+  if (cached) return Promise.resolve(cached);
+
+  return fetchServerPoster(storageId, path, token, timeoutMs)
+    .then((entry) => {
+      if (entry) {
+        savePoster(key, entry);
+        return entry;
+      }
+      // 服务端海报不可用（未部署 / ffmpeg 失败 / 网络错）→ 回退到浏览器 canvas 捕获
+      return capturePosterCanvas(storageId, path, token, timeoutMs);
+    })
+    .catch(() => capturePosterCanvas(storageId, path, token, timeoutMs));
 }
 
 /* ---------------- 继续观看进度（localStorage） ---------------- */
