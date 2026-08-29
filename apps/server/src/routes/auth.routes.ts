@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import crypto from 'node:crypto';
 import { authMiddleware, ok, fail } from '../auth/middleware.js';
 import { signJwt } from '../auth/jwt.js';
 import { jwtSecret } from '../config.js';
@@ -22,8 +21,8 @@ import {
   getFailureCount,
 } from '../services/captcha.service.js';
 import { getDb } from '../db/index.js';
-import { verifyCode } from '../services/totp.service.js';
-import { recordSession, parseDeviceName } from '../services/session.service.js';
+import { verifyCode, matchRecoveryCode } from '../services/totp.service.js';
+import { recordSession, parseDeviceName, revokeCurrentSession, hashToken } from '../services/session.service.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 获取验证码
@@ -84,21 +83,12 @@ export async function authRoutes(app: FastifyInstance) {
       }
       // 验证 2FA 代码
       if (!verifyCode(twoFa.secret, parseInt(twoFactorCode, 10))) {
-        // 检查恢复码
+        // 检查恢复码（库内存 sha256 哈希，兼容历史明文；命中后消耗）
         const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
-        const match = codes.some((c) => {
-          const a = Buffer.from(c);
-          const b = Buffer.from(twoFactorCode.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
-          return a.length === b.length && crypto.timingSafeEqual(a, b);
-        });
-        if (!match) {
+        const idx = matchRecoveryCode(codes, twoFactorCode);
+        if (idx === -1) {
           return fail(reply, 401, '验证码错误');
         }
-        const idx = codes.findIndex((c) => {
-          const a = Buffer.from(c);
-          const b = Buffer.from(twoFactorCode.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
-          return a.length === b.length && crypto.timingSafeEqual(a, b);
-        });
         codes.splice(idx, 1);
         db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
           .run(JSON.stringify(codes), u.id);
@@ -144,19 +134,10 @@ export async function authRoutes(app: FastifyInstance) {
       });
     }
 
-    // 检查恢复码
+    // 检查恢复码（库内存 sha256 哈希，兼容历史明文；命中后消耗）
     const codes: string[] = JSON.parse(twoFa.recovery_codes || '[]');
-    const match = codes.some((c) => {
-      const a = Buffer.from(c);
-      const b = Buffer.from(code.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
-      return a.length === b.length && crypto.timingSafeEqual(a, b);
-    });
-    if (match) {
-      const idx = codes.findIndex((c) => {
-        const a = Buffer.from(c);
-        const b = Buffer.from(code.toUpperCase().padEnd(c.length, '\0').slice(0, c.length));
-        return a.length === b.length && crypto.timingSafeEqual(a, b);
-      });
+    const idx = matchRecoveryCode(codes, code);
+    if (idx !== -1) {
       codes.splice(idx, 1);
       db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
         .run(JSON.stringify(codes), payload.sub);
@@ -179,6 +160,10 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/auth/logout', { preHandler: authMiddleware }, async (req, reply) => {
+    // 登出即失效：当前 token 写入撤销列表，后续请求一律 401（不能只靠前端删 token）
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (token) revokeCurrentSession(req.user!.sub, hashToken(token));
     return ok(reply, { ok: true });
   });
 

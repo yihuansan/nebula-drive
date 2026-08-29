@@ -3,7 +3,16 @@ import { ok, fail, requirePermission } from '../auth/middleware';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execSync, spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
+import { createReadStream } from 'node:fs';
+
+/** 流式计算文件 SHA256（不整包驻留内存） */
+async function sha256File(file: string): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  await pipeline(createReadStream(file), hash);
+  return hash.digest('hex');
+}
 
 // 获取 GitHub Token（优先环境变量，其次 data/.github-token 文件）
 // 返回已验证的非空 token，否则返回空串（调用方通过 `if (token)` 判断是否加 Authorization 头）
@@ -161,28 +170,32 @@ export async function updateRoutes(app: FastifyInstance) {
       const zipRes = await fetch(asset.browser_download_url, {
         headers: { 'User-Agent': 'NebulaDrive' },
       });
-      if (!zipRes.ok) {
+      if (!zipRes.ok || !zipRes.body) {
         log(`ERROR: 下载失败 ${zipRes.status}`);
         return fail(reply, 500, '下载版本包失败');
       }
-
-      const buffer = await zipRes.arrayBuffer();
-      fs.writeFileSync(zipPath, Buffer.from(buffer));
-      log(`下载完成: ${buffer.byteLength} bytes`);
-
+      
+      // 流式写盘：大版本包不整包驻留内存（下载完成后从文件计算哈希）
+      try {
+        await pipeline(zipRes.body as unknown as NodeJS.ReadableStream, fs.createWriteStream(zipPath));
+      } catch (e: any) {
+        log(`ERROR: 写入版本包失败: ${e.message}`);
+        fs.rmSync(zipPath, { force: true });
+        return fail(reply, 500, '下载版本包失败');
+      }
+      log(`下载完成: ${fs.statSync(zipPath).size} bytes`);
+      
       // P1-8 修复：SHA256 完整性校验
       // 从 GitHub release 下载 .sha256 文件，验证下载包的哈希
-      const sha256File = asset.name + '.sha256';
-      const sha256Url = asset.browser_download_url.replace(/[^/]*$/, sha256File);
-      let sha256Verified = false;
+      const sha256File_ = asset.name + '.sha256';
+      const sha256Url = asset.browser_download_url.replace(/[^/]*$/, sha256File_);
       try {
         const shaRes = await fetch(sha256Url, { headers: { 'User-Agent': 'NebulaDrive' } });
         if (shaRes.ok) {
           const shaContent = (await shaRes.text()).trim();
           const expectedHash = shaContent.split(/\s+/)[0].toLowerCase();
-          const actualHash = crypto.createHash('sha256').update(Buffer.from(buffer)).digest('hex');
+          const actualHash = await sha256File(zipPath);
           if (expectedHash === actualHash) {
-            sha256Verified = true;
             log('SHA256 校验通过');
           } else {
             log(`ERROR: SHA256 校验失败 (expected: ${expectedHash}, actual: ${actualHash})`);
@@ -190,7 +203,7 @@ export async function updateRoutes(app: FastifyInstance) {
             return fail(reply, 500, 'SHA256 校验失败，下载包可能被篡改');
           }
         } else {
-          log(`ERROR: 无法获取 SHA256 文件 (${shaRes.status})`);
+          log(`ERROR: 无法获取 sha256 文件 (${shaRes.status})`);
           fs.rmSync(zipPath, { force: true });
           return fail(reply, 500, '无法验证版本包完整性，安装已中止');
         }
@@ -206,14 +219,19 @@ export async function updateRoutes(app: FastifyInstance) {
 
       log('3. 解压版本包...');
       let extractError = '';
-      try {
-        execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { timeout: 60000 });
-      } catch (e: any) {
-        extractError = e.message;
-        try {
-          execSync(`tar -xf "${zipPath}" -C "${extractDir}"`, { timeout: 60000 });
-        } catch (e2: any) {
-          extractError += ' | ' + e2.message;
+      // 无 shell 拼接：参数数组直传，路径中的特殊字符不会触发命令注入；
+      // PowerShell 单引号串内用双单引号转义（-LiteralPath 不做通配符展开）
+      const psQuote = (s: string) => s.replace(/'/g, "''");
+      const ps = spawnSync(
+        'powershell',
+        ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${psQuote(zipPath)}' -DestinationPath '${psQuote(extractDir)}' -Force`],
+        { timeout: 60000 },
+      );
+      if (ps.error || ps.status !== 0) {
+        extractError = ps.error?.message || (ps.stderr?.toString().slice(0, 200) || 'Expand-Archive 失败');
+        const tar = spawnSync('tar', ['-xf', zipPath, '-C', extractDir], { timeout: 60000 });
+        if (tar.error || tar.status !== 0) {
+          extractError += ' | ' + (tar.error?.message || tar.stderr?.toString().slice(0, 200) || 'tar 失败');
         }
       }
 
@@ -245,6 +263,9 @@ export async function updateRoutes(app: FastifyInstance) {
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+
+// 新版本号（JSON.stringify 转义，防 tag_name 注入生成脚本）
+const NEW_VERSION = ${JSON.stringify(newVersion)};
 
 const logFile = ${JSON.stringify(path.join(process.cwd(), 'update_debug.log'))};
 const log = (msg) => {
@@ -304,14 +325,14 @@ try {
 
       if (newVersion) {
         script += `
-log('更新版本号到 ${newVersion}...');
+log('更新版本号到 ' + NEW_VERSION + '...');
 const readPkg = (p) => {
   const raw = fs.readFileSync(p, 'utf-8');
   return JSON.parse(raw.replace(/^\\uFEFF/, ''));
 };
 try {
   const pkg = readPkg(${JSON.stringify(serverPkgPath)});
-  pkg.version = '${newVersion}';
+  pkg.version = NEW_VERSION;
   fs.writeFileSync(${JSON.stringify(serverPkgPath)}, JSON.stringify(pkg, null, 2));
   log('server package.json 已更新');
 } catch (e) {
@@ -319,7 +340,7 @@ try {
 }
 try {
   const pkg = readPkg(${JSON.stringify(rootPkgPath)});
-  pkg.version = '${newVersion}';
+  pkg.version = NEW_VERSION;
   fs.writeFileSync(${JSON.stringify(rootPkgPath)}, JSON.stringify(pkg, null, 2));
   log('root package.json 已更新');
 } catch (e) {

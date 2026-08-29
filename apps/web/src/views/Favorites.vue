@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { api, fmtSize } from '../api';
+import { api, fmtSize, loadThumbs } from '../api';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import PageHeader from '../components/PageHeader.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const router = useRouter();
 
@@ -41,6 +43,26 @@ const starredSet = ref<Set<string>>(new Set());
 function starKey(storageId: number, path: string) { return storageId + '||' + path; }
 function isFav(storageId: number, path: string) { return starredSet.value.has(starKey(storageId, path)); }
 
+/* ---------- 类型筛选 ---------- */
+const favFilter = ref<'all' | 'folder' | 'media' | 'doc' | 'other'>('all');
+function favTypeOf(row: any): 'folder' | 'media' | 'doc' | 'other' {
+  if (row.isDir) return 'folder';
+  const n = fileName(row.path);
+  if (isImage(n) || isVideo(n) || isAudio(n)) return 'media';
+  if (isPdf(n) || isCode(n) || /\.(doc|docx|xls|xlsx|ppt|pptx)$/i.test(n)) return 'doc';
+  return 'other';
+}
+const favFilters = computed(() => [
+  { key: 'all', label: '全部', count: favorites.value.length },
+  { key: 'folder', label: '文件夹', count: favorites.value.filter((f) => favTypeOf(f) === 'folder').length },
+  { key: 'media', label: '媒体', count: favorites.value.filter((f) => favTypeOf(f) === 'media').length },
+  { key: 'doc', label: '文档', count: favorites.value.filter((f) => favTypeOf(f) === 'doc').length },
+  { key: 'other', label: '其他', count: favorites.value.filter((f) => favTypeOf(f) === 'other').length },
+]);
+const filteredFavorites = computed(() =>
+  favFilter.value === 'all' ? favorites.value : favorites.value.filter((f) => favTypeOf(f) === favFilter.value),
+);
+
 /* ---------- 数据加载 ---------- */
 async function load() {
   loading.value = true;
@@ -74,6 +96,7 @@ async function load() {
       }
     }));
     favorites.value = resolved;
+    startThumbs();
   } catch (e: any) {
     ElMessage.error(e.message || '加载收藏失败');
     hasLoaded.value = true;
@@ -82,6 +105,21 @@ async function load() {
     loading.value = false;
     showSkeleton.value = false;
   }
+}
+
+/* 图片文件缩略图（带鉴权拉取，失败回退图标） */
+const thumbs = ref<Record<string, string>>({});
+let abortThumbs: (() => void) | null = null;
+function startThumbs() {
+  abortThumbs?.();
+  thumbs.value = {};
+  abortThumbs = loadThumbs(
+    favorites.value.filter((f) => f.valid && !f.isDir).map((f) => ({ storageId: f.storage_id, path: f.path })),
+    (path, url) => {
+      thumbs.value[path] = url;
+    },
+    96
+  );
 }
 
 /* ---------- 文件夹浏览 ---------- */
@@ -113,6 +151,16 @@ async function loadBrowse() {
   try {
     const r = await api(`/files?storageId=${browseStorageId.value}&path=${encodeURIComponent(browsePath.value)}&sort=name&order=asc`);
     browseEntries.value = r.entries.map((e: any) => ({ ...e, storage_id: browseStorageId.value }));
+    // 浏览视图同样拉缩略图（覆盖列表视图的中止）
+    abortThumbs?.();
+    const sid = browseStorageId.value;
+    abortThumbs = loadThumbs(
+      browseEntries.value.filter((e: any) => !e.isDir).map((e: any) => ({ storageId: sid, path: e.path })),
+      (path, url) => {
+        thumbs.value[path] = url;
+      },
+      96
+    );
   } catch (e: any) {
     ElMessage.error(e.message || '打开文件夹失败');
   } finally {
@@ -398,20 +446,38 @@ function goToFile(fav: any) {
 }
 
 onMounted(async () => { await load(); });
+onUnmounted(() => abortThumbs?.());
 </script>
 
 <template>
   <div class="fav-page">
-    <div class="page-header glass">
-      <h2>我的收藏</h2>
-      <div class="fav-toolbar">
-        <span class="fav-count" v-if="favorites.length">共 {{ favorites.length }} 项</span>
-        <el-button size="small" @click="view === 'browse' ? loadBrowse() : load()" :loading="loading || browseLoading">刷新</el-button>
-      </div>
-    </div>
+    <PageHeader
+      icon="StarFilled"
+      title="我的收藏"
+      :subtitle="favorites.length ? `共 ${favorites.length} 项 · 在文件管理中点星标即可收藏` : '在文件管理中点星标即可收藏'"
+    >
+      <template #actions>
+        <el-button size="small" @click="view === 'browse' ? loadBrowse() : load()" :loading="loading || browseLoading">
+          <el-icon><Refresh /></el-icon>&nbsp;刷新
+        </el-button>
+      </template>
+    </PageHeader>
 
     <!-- 收藏列表视图 -->
     <template v-if="view === 'list'">
+      <!-- 类型筛选条 -->
+      <div v-if="favorites.length" class="filter-chips fav-filters page-enter">
+        <span
+          v-for="f in favFilters"
+          :key="f.key"
+          class="chip"
+          :class="{ active: favFilter === f.key }"
+          @click="favFilter = f.key as any"
+        >
+          {{ f.label }}
+          <span class="chip-count">{{ f.count }}</span>
+        </span>
+      </div>
       <!-- 骨架屏：仅在加载超过 150ms 时显示 -->
       <template v-if="showSkeleton">
         <div class="skeleton-table glass">
@@ -424,12 +490,22 @@ onMounted(async () => { await load(); });
         </div>
       </template>
       <template v-else>
-      <el-empty v-if="hasLoaded && !favorites.length" description="还没有收藏任何文件，去文件管理里点星标吧" />
-      <el-table v-else-if="favorites.length" :data="favorites" v-loading="loading" class="fav-table fade-in">
+      <EmptyState
+        v-if="hasLoaded && !favorites.length"
+        title="还没有收藏"
+        description="去文件管理里给常用文件或文件夹点星标，它们会出现在这里"
+      />
+      <EmptyState
+        v-else-if="hasLoaded && favorites.length && !filteredFavorites.length"
+        title="当前筛选无结果"
+        description="换个类型筛选试试"
+      />
+      <el-table v-else-if="filteredFavorites.length" :data="filteredFavorites" v-loading="loading" class="fav-table fade-in">
         <el-table-column label="名称" min-width="220">
           <template #default="{ row }">
             <div class="fav-name-cell" :class="{ clickable: row.isDir }" @click="row.isDir && openFolder(row)">
-              <el-icon :size="20" :color="row.isDir ? '#e8b04b' : (isImage(fileName(row.path)) ? '#ec4899' : '#409eff')">
+              <img v-if="thumbs[row.path]" :src="thumbs[row.path]" class="fav-thumb" :alt="fileName(row.path)" loading="lazy" />
+              <el-icon v-else :size="20" :color="row.isDir ? '#e8b04b' : (isImage(fileName(row.path)) ? '#ec4899' : '#409eff')">
                 <FolderOpened v-if="row.isDir" />
                 <Picture v-else-if="isImage(fileName(row.path))" />
                 <VideoPlay v-else-if="isVideo(fileName(row.path))" />
@@ -488,7 +564,8 @@ onMounted(async () => { await load(); });
         <el-table-column label="名称" min-width="240">
           <template #default="{ row }">
             <div class="fav-name-cell" :class="{ clickable: row.isDir }" @click="row.isDir && browseTo(row.path)">
-              <el-icon :size="20" :color="row.isDir ? '#e8b04b' : (isImage(row.name) ? '#ec4899' : '#409eff')">
+              <img v-if="!row.isDir && thumbs[row.path]" :src="thumbs[row.path]" class="fav-thumb" :alt="row.name" loading="lazy" />
+              <el-icon v-else :size="20" :color="row.isDir ? '#e8b04b' : (isImage(row.name) ? '#ec4899' : '#409eff')">
                 <FolderOpened v-if="row.isDir" />
                 <Picture v-else-if="isImage(row.name)" />
                 <VideoPlay v-else-if="isVideo(row.name)" />
@@ -596,6 +673,7 @@ onMounted(async () => { await load(); });
 
 <style scoped>
 .fav-page { padding: 20px; }
+.fav-filters { margin-bottom: 14px; }
 
 /* ---------- 骨架屏 + 淡入动画 ---------- */
 .skeleton-table {
@@ -664,6 +742,14 @@ onMounted(async () => { await load(); });
 .fav-toolbar { display: flex; align-items: center; gap: 12px; }
 .fav-count { font-size: 13px; color: var(--text-secondary); }
 .fav-name-cell { display: flex; align-items: center; gap: 8px; }
+.fav-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--glass-border);
+}
 .fav-name-cell.clickable { cursor: pointer; }
 .fav-name-cell.clickable:hover .fav-name { color: var(--el-color-primary, #409eff); }
 .fav-name {

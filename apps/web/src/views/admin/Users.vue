@@ -111,6 +111,9 @@ function roleTag(role: string) {
 function roleLabel(role: string) {
   return role === 'admin' ? '管理员' : '普通用户';
 }
+function roleBadge(role: string) {
+  return role === 'admin' ? 'danger' : 'info';
+}
 function statusTag(status: string) {
   return status === 'active' ? 'success' : 'info';
 }
@@ -469,6 +472,7 @@ onMounted(() => {
       <el-table
         v-loading="loading"
         :data="users"
+        :row-class-name="() => 'page-enter'"
         @selection-change="onSelectionChange"
         @sort-change="onSortChange"
         row-key="id"
@@ -490,16 +494,22 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="角色" width="110">
           <template #default="{ row }">
-            <el-tag size="small" :type="roleTag(row.role)">{{ roleLabel(row.role) }}</el-tag>
+            <span class="status-badge" :class="roleBadge(row.role)">{{ roleLabel(row.role) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="120">
+        <el-table-column label="状态" width="170">
           <template #default="{ row }">
-            <el-switch
-              :model-value="row.status === 'active'"
-              :disabled="row.id === meId"
-              @change="(v) => toggleStatus(row, !!v)"
-            />
+            <div class="status-cell">
+              <el-switch
+                :model-value="row.status === 'active'"
+                :disabled="row.id === meId"
+                @change="(v) => toggleStatus(row, !!v)"
+              />
+              <span class="status-badge" :class="row.status === 'active' ? 'ok' : 'neutral'">
+                <i class="dot" :class="{ pulse: row.status === 'active' }" />
+                {{ row.status === 'active' ? '启用' : '禁用' }}
+              </span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="在线" width="90">
@@ -914,6 +924,11 @@ onMounted(() => {
 .online-label {
   font-size: 12px;
   color: var(--text-secondary);
+}
+.status-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ---------- 行内操作（详情 / 编辑 / 更多） ---------- */

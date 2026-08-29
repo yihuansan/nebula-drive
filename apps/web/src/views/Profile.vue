@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtSize, fmtTime } from '../api';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import RingChart from '../components/RingChart.vue';
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -300,6 +301,26 @@ function usageColor(pct: number) {
   return '#16a34a';
 }
 
+/* ---------- 存储用量汇总（环形图） ---------- */
+const usageTotalBytes = computed(() => storageUsage.value.reduce((a, s) => a + (s.used || 0), 0));
+const quotaTotalBytes = computed(() => {
+  const q = storageUsage.value.reduce((a, s) => a + (s.quota || 0), 0);
+  return q || ((auth.user as any)?.quota || 0);
+});
+const usagePercent = computed(() =>
+  quotaTotalBytes.value > 0
+    ? Math.min(100, Math.round((usageTotalBytes.value / quotaTotalBytes.value) * 100))
+    : null
+);
+
+/* 设备图标：按设备名关键词匹配 */
+function deviceIcon(name: string) {
+  const n = (name || '').toLowerCase();
+  if (/iphone|android|mobile|手机/.test(n)) return 'Iphone';
+  if (/ipad|tablet|平板/.test(n)) return 'Cellphone';
+  return 'Monitor';
+}
+
 onMounted(async () => {
   profileLoading.value = true;
   // 延迟 150ms 后才显示骨架屏，快速加载时不闪烁
@@ -432,6 +453,21 @@ onMounted(async () => {
         <!-- 存储用量 -->
         <div class="profile-card glass">
           <h2 class="section-title">存储用量</h2>
+          <div v-if="storageUsage.length" class="usage-summary">
+            <RingChart
+              :percent="usagePercent"
+              :center-text="usagePercent == null ? '不限' : usagePercent + '%'"
+              :center-sub="fmtSize(usageTotalBytes)"
+              :size="116"
+            />
+            <div class="usage-total-info">
+              <div class="usage-total-num">{{ fmtSize(usageTotalBytes) }}</div>
+              <div class="usage-total-cap">
+                {{ quotaTotalBytes ? '总配额 ' + fmtSize(quotaTotalBytes) : '无配额限制' }}
+              </div>
+              <div class="usage-total-cap">{{ storageUsage.length }} 个存储</div>
+            </div>
+          </div>
           <div v-for="s in storageUsage" :key="s.id" class="storage-item">
             <div class="storage-name">{{ s.name }} <el-tag size="small" type="info">{{ s.files }} 个文件</el-tag></div>
             <el-progress
@@ -467,8 +503,8 @@ onMounted(async () => {
         <div class="profile-card glass">
           <h2 class="section-title">
             双因素认证 (2FA)
-            <el-tag v-if="twoFaStatus.enabled" type="success" size="small">已启用</el-tag>
-            <el-tag v-else type="info" size="small">未启用</el-tag>
+            <span v-if="twoFaStatus.enabled" class="status-badge ok"><i class="dot" />已启用</span>
+            <span v-else class="status-badge neutral">未启用</span>
           </h2>
           <p class="twoFa-desc">使用 Google Authenticator 或 1Password 等 TOTP 应用保护账号安全</p>
 
@@ -499,6 +535,9 @@ onMounted(async () => {
           <div v-else>
             <div v-for="s in sessions" :key="s.id" class="session-item">
               <div class="session-info">
+                <span class="session-dev-icon">
+                  <el-icon><component :is="deviceIcon(s.deviceName)" /></el-icon>
+                </span>
                 <span class="session-device">{{ s.deviceName }}</span>
                 <el-tag v-if="s.isCurrent" type="success" size="small">当前设备</el-tag>
                 <span class="session-ip">{{ s.ipAddress }}</span>
@@ -670,6 +709,39 @@ onMounted(async () => {
 }
 .storage-item {
   margin-bottom: 16px;
+}
+.usage-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 6px 0 18px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.usage-total-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-total-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.usage-total-cap {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.session-dev-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--glass-border);
 }
 .storage-name {
   font-size: 14px;

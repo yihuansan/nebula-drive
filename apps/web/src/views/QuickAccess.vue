@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { api } from '../api';
+import { ref, onMounted, onUnmounted } from 'vue';
+import { api, loadThumbs } from '../api';
 import { ElMessage } from 'element-plus';
+import PageHeader from '../components/PageHeader.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const loading = ref(false);
 const entries = ref<any[]>([]);
@@ -25,11 +27,29 @@ async function load() {
   try {
     const r = await api(`/files/quick-access?storageId=${storageId.value}`);
     entries.value = r.entries;
+    startThumbs();
   } catch (e: any) {
     ElMessage.error(e.message || '加载快捷访问失败');
   } finally {
     loading.value = false;
   }
+}
+
+/* 图片文件缩略图（带鉴权拉取，失败回退图标） */
+const thumbs = ref<Record<string, string>>({});
+let abortThumbs: (() => void) | null = null;
+function startThumbs() {
+  abortThumbs?.();
+  thumbs.value = {};
+  const sid = storageId.value;
+  if (!sid) return;
+  abortThumbs = loadThumbs(
+    entries.value.filter((e) => !e.isDir).map((e) => ({ storageId: sid, path: e.path })),
+    (path, url) => {
+      if (storageId.value === sid) thumbs.value[path] = url;
+    },
+    160
+  );
 }
 
 async function togglePin(row: any) {
@@ -48,20 +68,28 @@ function fmtSize(bytes: number) {
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + units[i];
 }
+
+onUnmounted(() => abortThumbs?.());
 </script>
 
 <template>
   <div class="quick-page">
-    <div class="page-header glass">
-      <h2>快捷访问</h2>
-      <el-select v-model="storageId" size="small" @change="load" style="width: 180px">
-        <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
-      </el-select>
-    </div>
+    <PageHeader
+      icon="Star"
+      title="快捷访问"
+      subtitle="固定的常用文件与文件夹，一键直达"
+    >
+      <template #actions>
+        <el-select v-model="storageId" size="small" @change="load" style="width: 180px">
+          <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+      </template>
+    </PageHeader>
 
-    <div class="quick-grid" v-loading="loading">
-      <div v-for="row in entries" :key="row.path" class="quick-item glass-card">
-        <el-icon :size="36" :color="row.isDir ? '#409eff' : '#909399'">
+    <div class="quick-grid page-enter-stagger" v-loading="loading">
+      <div v-for="(row, i) in entries" :key="row.path" class="quick-item glass-card hover-lift" :style="{ '--i': i }">
+        <img v-if="thumbs[row.path]" :src="thumbs[row.path]" class="quick-thumb" :alt="row.name" loading="lazy" />
+        <el-icon v-else :size="36" :color="row.isDir ? '#409eff' : '#909399'">
           <Folder v-if="row.isDir" />
           <Document v-else />
         </el-icon>
@@ -71,10 +99,11 @@ function fmtSize(bytes: number) {
           <el-icon><StarFilled /></el-icon>
         </el-button>
       </div>
-      <div v-if="!loading && !entries.length" class="empty">
-        <p>暂无快捷访问项</p>
-        <p class="tip">在「文件管理」中右键点击文件或文件夹，选择「添加到快捷访问」即可</p>
-      </div>
+      <EmptyState
+        v-if="!loading && !entries.length"
+        title="暂无快捷访问项"
+        description="在「文件管理」中右键点击文件或文件夹，选择「添加到快捷访问」即可"
+      />
     </div>
   </div>
 </template>
@@ -112,6 +141,13 @@ function fmtSize(bytes: number) {
   text-overflow: ellipsis;
 }
 .quick-meta { font-size: 12px; color: var(--text-secondary); }
+.quick-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--glass-border);
+}
 .empty { grid-column: 1 / -1; text-align: center; padding: 60px; color: var(--text-secondary); }
 .tip { font-size: 12px; margin-top: 8px; }
 </style>

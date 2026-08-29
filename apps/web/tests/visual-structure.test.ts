@@ -77,4 +77,145 @@ describe('Login.vue 视觉提升', () => {
       expect(login).toMatch(/\.login-btn:hover\s*\{[^}]*box-shadow:\s*0 14px 32px var\(--accent-soft\)/);
     });
   });
+
+  describe('分屏布局（二期焕新）', () => {
+    it('存在分屏包裹与左侧品牌展示区', () => {
+      expect(login).toContain('class="login-split"');
+      expect(login).toContain('class="login-hero"');
+    });
+
+    it('定义 3 条功能亮点', () => {
+      expect(login).toMatch(/heroFeatures\s*=\s*\[[\s\S]*?多存储统一管理[\s\S]*?一键分享协作[\s\S]*?双重认证防护/);
+    });
+
+    it('功能列表用 v-for 渲染', () => {
+      expect(login).toMatch(/v-for="f in heroFeatures"/);
+    });
+
+    it('窄屏（≤900px）隐藏左栏回落单栏', () => {
+      expect(login).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.login-hero \{[^}]*display:\s*none/);
+    });
+
+    it('宽屏隐藏卡片内重复品牌区', () => {
+      expect(login).toMatch(/@media \(min-width: 900px\)[\s\S]*?\.login-card \.brand \{[^}]*display:\s*none/);
+    });
+  });
+});
+
+describe('产品化升级（三期）', () => {
+  const repoRoot = resolve(__dirname, '../../..');
+  function readRepo(rel: string): string {
+    return readFileSync(resolve(repoRoot, rel), 'utf-8');
+  }
+
+  it('App.vue 挂载 TransferCenter 全局传输中心', () => {
+    const app = readSrc('App.vue');
+    expect(app).toContain("import TransferCenter from './components/TransferCenter.vue'");
+    expect(app).toContain('<TransferCenter />');
+  });
+
+  it('router.ts 含 /tags 路由且侧边栏有标签入口', () => {
+    const router = readSrc('router.ts');
+    expect(router).toContain("path: '/tags'");
+    expect(router).toContain('Tags.vue');
+    const app = readSrc('App.vue');
+    expect(app).toContain("path: '/tags'");
+  });
+
+  it('Files.vue 接入 FileDetailDrawer 详情抽屉（版本/评论）', () => {
+    const files = readSrc('views/Files.vue');
+    expect(files).toContain("import FileDetailDrawer from '../components/FileDetailDrawer.vue'");
+    expect(files).toContain('<FileDetailDrawer');
+  });
+
+  it('Tags.vue / TransferCenter.vue / FileDetailDrawer.vue 存在', () => {
+    expect(readSrc('views/Tags.vue')).toContain('files-by-tag');
+    expect(readSrc('components/TransferCenter.vue')).toContain('useTransferStore');
+    expect(readSrc('components/FileDetailDrawer.vue')).toContain('versions');
+  });
+
+  it('Shares.vue 接入二维码（qrcode）', () => {
+    const shares = readSrc('views/Shares.vue');
+    expect(shares).toContain("import QRCode from 'qrcode'");
+    expect(shares).toContain('toDataURL');
+  });
+
+  it('recycle.routes.ts 含 /recycle/batch 批量端点', () => {
+    const routes = readRepo('apps/server/src/routes/recycle.routes.ts');
+    expect(routes).toContain("'/recycle/batch'");
+    expect(routes).toContain("'restore'");
+    expect(routes).toContain("'purge'");
+  });
+
+  it('log.routes.ts 含 export.csv 导出端点', () => {
+    const routes = readRepo('apps/server/src/routes/log.routes.ts');
+    expect(routes).toContain("'/logs/export.csv'");
+    expect(routes).toContain('text/csv');
+  });
+});
+
+describe('焕然一新升级（四期）', () => {
+  it('App.vue 挂载 CommandPalette 全局命令面板', () => {
+    const app = readSrc('App.vue');
+    expect(app).toContain("import CommandPalette from './components/CommandPalette.vue'");
+    expect(app).toContain('<CommandPalette />');
+  });
+
+  it('CommandPalette.vue：Ctrl/⌘+K 唤起 + 文件搜索 + 快捷动作', () => {
+    const cp = readSrc('components/CommandPalette.vue');
+    expect(cp).toContain("e.key === 'k'");
+    expect(cp).toContain('/search?q=');
+    expect(cp).toContain('nd:open-theme-picker');
+  });
+
+  it('Files.vue 私有 cmdk 已移除', () => {
+    const files = readSrc('views/Files.vue');
+    expect(files).not.toContain('cmdkOpen');
+    expect(files).not.toContain('onCmdkKeydown');
+  });
+
+  it('Files.vue 批量浮动操作条（全选/反选/下载/移动/复制/收藏/删除）', () => {
+    const files = readSrc('views/Files.vue');
+    expect(files).toContain('class="selection-bar glass fade-up"');
+    expect(files).toContain('function selectAll()');
+    expect(files).toContain('function invertSelection()');
+    expect(files).toContain('function doBatchStar()');
+  });
+
+  it('Files.vue 键盘快捷键 + 帮助对话框', () => {
+    const files = readSrc('views/Files.vue');
+    expect(files).toContain('function onFilesKeydown');
+    expect(files).toContain('shortcutDialog');
+    expect(files).toContain("case 'shortcuts'");
+  });
+
+  it('Files.vue 搜索对话框接入搜索历史', () => {
+    const files = readSrc('views/Files.vue');
+    expect(files).toContain('/search-history?limit=8');
+    expect(files).toContain('useHistoryQuery');
+    expect(files).toContain('clearSearchHistory');
+  });
+
+  it('五个页面接入 loadThumbs 缩略图', () => {
+    for (const p of ['views/Favorites.vue', 'views/Recent.vue', 'views/QuickAccess.vue', 'views/Tags.vue', 'views/Recycle.vue']) {
+      expect(readSrc(p)).toContain('loadThumbs');
+    }
+  });
+
+  it('Media.vue 不再含裸缩略图请求，改走 loadThumbs', () => {
+    const media = readSrc('views/Media.vue');
+    expect(media).not.toContain('/files/thumbnail');
+    expect(media).toContain('loadThumbs');
+  });
+
+  it('glass.css 末尾追加微交互工具类', () => {
+    const css = readSrc('glass.css');
+    expect(css).toContain('.press:active');
+    expect(css).toContain('.fade-up {');
+  });
+
+  it('Recycle.vue 表格空态文案', () => {
+    const recycle = readSrc('views/Recycle.vue');
+    expect(recycle).toContain('回收站是空的');
+  });
 });

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import QRCode from 'qrcode';
 import { api, fmtTime } from '../api';
+import EmptyState from '../components/EmptyState.vue';
 
 const shares = ref<any[]>([]);
 const loading = ref(false);
@@ -27,6 +29,10 @@ function shareStatus(row: any) {
   if (exp < now) return { type: 'danger', label: '已过期' };
   if (exp - now < 86400000) return { type: 'warning', label: '即将过期' };
   return { type: 'success', label: '有效' };
+}
+/** el-tag type → 全局徽章色系 */
+function badgeCls(type: string) {
+  return ({ success: 'ok', danger: 'danger', warning: 'warn', info: 'info' } as Record<string, string>)[type] || 'neutral';
 }
 
 const filtered = computed(() => {
@@ -93,19 +99,42 @@ async function doCreate() {
     ElMessage.success('分享已创建');
     createDialog.value = false;
     load();
-    copyUrl(r.url, r.share?.token);
+    const token = r.share?.token;
+    if (token && form.value.password) rememberPassword(token, form.value.password);
+    copyUrl(r.url, token);
   } catch (e: any) {
     ElMessage.error(e.message || '创建分享失败');
   }
 }
 
-/* ---------- 复制链接 ---------- */
+/* ---------- 提取码缓存（后端仅存 hash，明文只在创建时可知，缓存到 sessionStorage 供复制/二维码展示） ---------- */
+const PW_KEY = 'nd-share-passwords';
+function sharePasswords(): Record<string, string> {
+  try {
+    return JSON.parse(sessionStorage.getItem(PW_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+function rememberPassword(token: string, password: string) {
+  if (!token || !password) return;
+  const map = sharePasswords();
+  map[token] = password;
+  try {
+    sessionStorage.setItem(PW_KEY, JSON.stringify(map));
+  } catch { /* 忽略 */ }
+}
+
+/* ---------- 复制链接（链接 + 提取码组合文本） ---------- */
 function copyUrl(url?: string, token?: string) {
   const u = url || (token ? `${location.origin}/s/${token}` : '');
   if (!u) return;
-  navigator.clipboard?.writeText(u).then(
-    () => ElMessage.success('分享链接已复制'),
-    () => ElMessage.warning('请手动复制：' + u)
+  const t = token || u.split('/s/').pop() || '';
+  const pwd = sharePasswords()[t];
+  const text = pwd ? `链接：${u}\n提取码：${pwd}` : u;
+  navigator.clipboard?.writeText(text).then(
+    () => ElMessage.success(pwd ? '链接和提取码已复制' : '分享链接已复制'),
+    () => ElMessage.warning('请手动复制：' + text)
   );
 }
 
@@ -116,6 +145,27 @@ function copyRow(row: any) {
 function openShare(row: any) {
   const u = `${location.origin}/s/${row.token}`;
   window.open(u, '_blank');
+}
+
+/* ---------- 二维码（对标百度网盘：扫码直达分享页） ---------- */
+const qrDialog = ref(false);
+const qrTarget = ref<any>(null);
+const qrDataUrl = ref('');
+const qrLink = ref('');
+async function openQr(row: any) {
+  qrTarget.value = row;
+  qrDataUrl.value = '';
+  qrLink.value = `${location.origin}/s/${row.token}`;
+  qrDialog.value = true;
+  try {
+    qrDataUrl.value = await QRCode.toDataURL(qrLink.value, {
+      width: 240,
+      margin: 1,
+      color: { dark: '#1e293b', light: '#ffffff' },
+    });
+  } catch {
+    ElMessage.error('二维码生成失败');
+  }
 }
 
 /* ---------- 删除 ---------- */
@@ -209,7 +259,7 @@ onMounted(load);
         </div>
       </div>
 
-      <el-table v-loading="loading" :data="filtered" class="shares-table">
+      <el-table v-if="loading || filtered.length" v-loading="loading" :data="filtered" class="shares-table">
         <el-table-column label="名称" min-width="180">
           <template #default="{ row }">
             <div class="share-cell">
@@ -223,14 +273,14 @@ onMounted(load);
         <el-table-column label="路径" min-width="200" prop="path" show-overflow-tooltip />
         <el-table-column label="提取码" width="100">
           <template #default="{ row }">
-            <el-tag v-if="row.password_hash" size="small" type="warning">有密码</el-tag>
+            <span v-if="row.password_hash" class="status-badge warn"><el-icon :size="12"><Lock /></el-icon>有密码</span>
             <span v-else class="muted">无</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="150">
           <template #default="{ row }">
             <div class="status-cell">
-              <el-tag size="small" :type="shareStatus(row).type">{{ shareStatus(row).label }}</el-tag>
+              <span class="status-badge" :class="badgeCls(shareStatus(row).type)">{{ shareStatus(row).label }}</span>
               <span class="exp-text">{{ fmtExp(row.expires_at) }}</span>
             </div>
           </template>
@@ -244,15 +294,29 @@ onMounted(load);
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240">
+        <el-table-column label="操作" width="290">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="copyRow(row)">复制链接</el-button>
+            <el-button link type="primary" size="small" @click="openQr(row)">二维码</el-button>
             <el-button link type="primary" size="small" @click="openShare(row)">打开</el-button>
             <el-button link type="primary" size="small" @click="openStats(row)">统计</el-button>
             <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 空状态 -->
+      <EmptyState
+        v-if="!loading && !shares.length"
+        title="还没有分享链接"
+        description="创建一个分享，把文件或文件夹以链接形式发给别人"
+      >
+        <template #actions>
+          <el-button type="primary" size="small" @click="openCreate">
+            <el-icon><Link /></el-icon>&nbsp;创建分享
+          </el-button>
+        </template>
+      </EmptyState>
     </div>
 
     <!-- 分享统计 -->
@@ -278,6 +342,24 @@ onMounted(load);
         </div>
         <div v-else-if="!statsLoading" class="empty-tip">无统计数据</div>
       </div>
+    </el-dialog>
+
+    <!-- 分享二维码 -->
+    <el-dialog v-model="qrDialog" title="分享二维码" width="380px">
+      <div class="qr-wrap">
+        <img v-if="qrDataUrl" :src="qrDataUrl" class="qr-img" alt="分享二维码" />
+        <div v-else class="qr-placeholder">生成中…</div>
+        <div class="qr-name">{{ qrTarget?.name || '未命名分享' }}</div>
+        <div class="qr-link">{{ qrLink }}</div>
+        <div v-if="qrTarget && sharePasswords()[qrTarget.token]" class="qr-pwd">
+          提取码：<b>{{ sharePasswords()[qrTarget.token] }}</b>
+        </div>
+        <div v-else-if="qrTarget?.password_hash" class="qr-pwd muted">该分享设有提取码</div>
+      </div>
+      <template #footer>
+        <el-button @click="copyRow(qrTarget)">复制链接</el-button>
+        <el-button type="primary" @click="qrDialog = false">关闭</el-button>
+      </template>
     </el-dialog>
 
     <!-- 创建分享 -->
@@ -485,5 +567,45 @@ onMounted(load);
   padding: 20px 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+/* ---------- 二维码 ---------- */
+.qr-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 4px;
+}
+.qr-img {
+  width: 240px;
+  height: 240px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: #fff;
+}
+.qr-placeholder {
+  width: 240px;
+  height: 240px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-radius: 12px;
+  border: 1px dashed var(--glass-border);
+}
+.qr-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.qr-link {
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  text-align: center;
+}
+.qr-pwd {
+  font-size: 13px;
+  color: var(--text);
 }
 </style>

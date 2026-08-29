@@ -35,3 +35,16 @@ export function clearLogs(): void {
   getDb().prepare('DELETE FROM op_logs').run();
   getDb().prepare('DELETE FROM login_logs').run();
 }
+
+/* ---------- 导出（CSV）：全量查询，上限 5 万条防止超大表阻塞 ---------- */
+const EXPORT_LIMIT = 50000;
+export function allOpLogs() {
+  return getDb()
+    .prepare('SELECT * FROM op_logs ORDER BY id DESC LIMIT ?')
+    .all(EXPORT_LIMIT) as { created_at: string; username: string | null; action: string; path: string | null; ip: string | null }[];
+}
+export function allLoginLogs() {
+  return getDb()
+    .prepare('SELECT * FROM login_logs ORDER BY id DESC LIMIT ?')
+    .all(EXPORT_LIMIT) as { created_at: string; username: string; ip: string | null; ua: string | null; success: number }[];
+}

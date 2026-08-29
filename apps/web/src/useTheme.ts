@@ -1,17 +1,38 @@
 import { ref, readonly, computed } from 'vue';
 
-/** 主题元数据 */
+/** 主题分组：2026 精选 / 玻璃质感 / 经典风格（主题选择器分组展示） */
+export const THEME_GROUPS = {
+  featured: '2026 精选',
+  glass: '玻璃质感',
+  classic: '经典风格',
+} as const;
+export type ThemeGroup = keyof typeof THEME_GROUPS;
+
+/** 主题元数据（swatch：选择器底色圆点预览色） */
 export const THEMES = {
-  'light-glass': { label: '毛玻璃', icon: '☀️', isGlass: true, layout: 'sidebar' },
-  'dark-glass': { label: '深色玻璃', icon: '🌙', isGlass: true, layout: 'sidebar' },
-  'top-nav': { label: '顶部导航', icon: '▬', isGlass: false, layout: 'topnav' },
-  'dashboard': { label: '仪表盘', icon: '📊', isGlass: true, layout: 'dashboard' },
-  'bento': { label: '便当盒', icon: '▦', isGlass: true, layout: 'bento' },
-  'command': { label: '命令式', icon: '⌘', isGlass: false, layout: 'command' },
-  /* 2026 创意新主题（创意设计师产出） */
-  'stardust': { label: '星尘', icon: '✨', isGlass: true, layout: 'sidebar' },
-  'dawn': { label: '晨曦', icon: '🌅', isGlass: false, layout: 'sidebar' },
-  'flow': { label: '流光', icon: '🌌', isGlass: true, layout: 'sidebar' },
+  /* ---------- 2026 精选 ---------- */
+  'light-glass': { label: '毛玻璃', icon: '☀️', isGlass: true, layout: 'sidebar', group: 'featured', swatch: '#6366f1' },
+  'dark-glass': { label: '深色玻璃', icon: '🌙', isGlass: true, layout: 'sidebar', group: 'featured', swatch: '#818cf8' },
+  'stardust': { label: '星尘', icon: '✨', isGlass: true, layout: 'sidebar', group: 'featured', swatch: '#4cc9ff' },
+  'dawn': { label: '晨曦', icon: '🌅', isGlass: false, layout: 'sidebar', group: 'featured', swatch: '#e8823c' },
+  'flow': { label: '流光', icon: '🌌', isGlass: true, layout: 'sidebar', group: 'featured', swatch: '#a78bfa' },
+  /* ---------- 玻璃质感 ---------- */
+  'silver': { label: '银灰', icon: '◈', isGlass: true, layout: 'sidebar', group: 'glass', swatch: '#4348e0' },
+  'aurora': { label: '极光', icon: '🌠', isGlass: true, layout: 'sidebar', group: 'glass', swatch: '#7c6ef0' },
+  'sunset': { label: '落日', icon: '🌇', isGlass: true, layout: 'sidebar', group: 'glass', swatch: '#ff6f91' },
+  'forest': { label: '森林', icon: '🌲', isGlass: true, layout: 'sidebar', group: 'glass', swatch: '#8fbc5a' },
+  'dashboard': { label: '仪表盘', icon: '📊', isGlass: true, layout: 'dashboard', group: 'glass', swatch: '#38bdf8' },
+  /* ---------- 经典风格 ---------- */
+  'minimal': { label: '极简经典', icon: '◻', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#2456d6' },
+  'top-nav': { label: '顶部导航', icon: '▬', isGlass: false, layout: 'topnav', group: 'classic', swatch: '#4f46e5' },
+  'bento': { label: '便当盒', icon: '▦', isGlass: false, layout: 'bento', group: 'classic', swatch: '#10b981' },
+  'command': { label: '命令式', icon: '⌘', isGlass: false, layout: 'command', group: 'classic', swatch: '#ff6b35' },
+  'cyberpunk': { label: '赛博霓虹', icon: '🌆', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#00ffc8' },
+  'retro': { label: '复古怀旧', icon: '📻', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#8b6c4c' },
+  'neumorphic': { label: '新拟态', icon: '◍', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#6c757d' },
+  'swiss': { label: '瑞士现代', icon: '✚', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#ff0000' },
+  'ink': { label: '水墨', icon: '🖌', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#8b4513' },
+  'terminal': { label: '终端', icon: '>_', isGlass: false, layout: 'sidebar', group: 'classic', swatch: '#00ff41' },
 } as const;
 
 export type ThemeKey = keyof typeof THEMES;

@@ -242,8 +242,8 @@ export class SyncEngine {
           }
         } else if (!L && R) {
           if (mode === 'push') {
-            if (S && L && S.size === L.size && Math.abs(S.mtime - L.mtime) <= MTIME_TOL) {
-              // 本地已删除且该文件曾同步 → 传播删除到远端
+            if (S) {
+              // 本地已删除且该文件在基线中存在（曾同步）→ 传播删除到远端（push 模式本地为准）
               await this.client.remove(rel);
               this.delBase(rel);
               rep.deletedRemote++;
@@ -255,10 +255,16 @@ export class SyncEngine {
           } else {
             // two-way
             if (S && S.size === R.size && Math.abs(S.mtime - R.mtime) <= MTIME_TOL) {
-              // 远端自基线未变、本地已删 → 删除已传播，清除基线
+              // 远端自基线未变且本地已删 → 传播删除到远端，避免下轮被拉回（复活）
+              await this.client.remove(rel);
               this.delBase(rel);
-            } else {
+              rep.deletedRemote++;
+            } else if (S) {
               // 远端有修改而本地删除 → 保留远端版本，拉回本地
+              await this.pullFile(rel, R.mtime);
+              rep.pulled++;
+            } else {
+              // 全新远端文件 → 双向模式复制到本地
               await this.pullFile(rel, R.mtime);
               rep.pulled++;
             }

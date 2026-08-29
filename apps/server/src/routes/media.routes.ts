@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import fsp from 'node:fs/promises';
 import { requirePermission, ok, fail } from '../auth/middleware.js';
 import { getStorageRecord } from '../services/file.service.js';
 import { getDriver } from '../storage/registry.js';
@@ -34,7 +35,23 @@ export async function mediaRoutes(app: FastifyInstance) {
       const local = driver as unknown as LocalDriver;
       const fullPath = local.resolveFull(p);
       const buf = await getThumbnail(storageId, p, fullPath, st.mtime, st.size, maxSide);
-      if (!buf) return fail(reply, 503, '缩略图生成失败（ffmpeg 不可用）');
+      if (!buf) {
+        /* 图片回退：无 ffmpeg 环境时，浏览器可直显格式的小图直接返回原图（前端 object-fit 缩放裁剪），
+           视频仍返回 503 */
+        const RAW_CT: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', jfif: 'image/jpeg',
+          png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+        };
+        if (isImage && RAW_CT[ext] && st.size <= 8 * 1024 * 1024) {
+          try {
+            const raw = await fsp.readFile(fullPath);
+            reply.header('Content-Type', RAW_CT[ext]);
+            reply.header('Cache-Control', 'public, max-age=86400');
+            return reply.send(raw);
+          } catch { /* 落入下方 503 */ }
+        }
+        return fail(reply, 503, '缩略图生成失败（ffmpeg 不可用）');
+      }
       reply.header('Content-Type', 'image/jpeg');
       reply.header('Cache-Control', 'public, max-age=86400');
       return reply.send(buf);

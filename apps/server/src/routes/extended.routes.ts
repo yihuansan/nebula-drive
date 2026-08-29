@@ -83,7 +83,7 @@ export async function extendedRoutes(app: FastifyInstance) {
   });
 
   app.get('/tags', { preHandler: requirePermission('files:view') }, async (_req, reply) => {
-    return ok(reply, { tags: tagService.allTags() });
+    return ok(reply, { tags: tagService.allTags(), counts: tagService.tagCounts() });
   });
 
   // 按标签筛选文件

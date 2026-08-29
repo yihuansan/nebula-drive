@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api, fmtSize, fmtTime } from '../api';
+import { api, fmtSize, fmtTime, loadThumbs } from '../api';
 
 const items = ref<any[]>([]);
 const loading = ref(false);
@@ -13,11 +13,27 @@ async function load() {
   try {
     const r = await api('/recycle');
     items.value = r.items;
+    startThumbs();
   } catch (e: any) {
     ElMessage.error(e.message || '加载回收站失败');
   } finally {
     loading.value = false;
   }
+}
+
+/* 图片文件缩略图（带鉴权拉取，失败回退图标） */
+const thumbs = ref<Record<string, string>>({});
+let abortThumbs: (() => void) | null = null;
+function startThumbs() {
+  abortThumbs?.();
+  thumbs.value = {};
+  abortThumbs = loadThumbs(
+    items.value.filter((it) => !it.is_dir).map((it) => ({ storageId: it.storage_id, path: it.path })),
+    (path, url) => {
+      thumbs.value[path] = url;
+    },
+    96
+  );
 }
 
 /* 读取回收站保留天数（系统设置） */
@@ -55,6 +71,17 @@ const stats = computed(() => {
   return { total, size };
 });
 
+/* 剩余保留天数徽章（按删除时间 + 保留期计算） */
+function remainInfo(row: any): { text: string; cls: string } {
+  if (retentionDays.value <= 0) return { text: '永久保留', cls: 'neutral' };
+  const t = new Date(row.deleted_at).getTime();
+  if (isNaN(t)) return { text: '-', cls: 'neutral' };
+  const days = Math.ceil((t + retentionDays.value * 86400000 - Date.now()) / 86400000);
+  if (days <= 0) return { text: '即将清理', cls: 'danger' };
+  if (days <= 3) return { text: `剩 ${days} 天`, cls: 'warn' };
+  return { text: `剩 ${days} 天`, cls: 'ok' };
+}
+
 /* ---------- 恢复 ---------- */
 async function doRestore(row: any) {
   try {
@@ -73,16 +100,15 @@ async function doBatchRestore() {
   } catch {
     return;
   }
-  let okCount = 0;
-  for (const row of selected.value) {
-    try {
-      await api('/recycle/restore', { method: 'POST', body: JSON.stringify({ id: row.id }) });
-      okCount++;
-    } catch {
-      /* 继续 */
-    }
+  try {
+    const r = await api('/recycle/batch', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'restore', ids: selected.value.map((x) => x.id) }),
+    });
+    ElMessage.success(`已恢复 ${r.succeeded} / ${selected.value.length} 项`);
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量恢复失败');
   }
-  ElMessage.success(`已恢复 ${okCount} / ${selected.value.length} 项`);
   load();
 }
 
@@ -109,16 +135,15 @@ async function doBatchDelete() {
   } catch {
     return;
   }
-  let okCount = 0;
-  for (const row of selected.value) {
-    try {
-      await api(`/recycle/${row.id}`, { method: 'DELETE' });
-      okCount++;
-    } catch {
-      /* 继续 */
-    }
+  try {
+    const r = await api('/recycle/batch', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'purge', ids: selected.value.map((x) => x.id) }),
+    });
+    ElMessage.success(`已删除 ${r.succeeded} / ${selected.value.length} 项`);
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量删除失败');
   }
-  ElMessage.success(`已删除 ${okCount} / ${selected.value.length} 项`);
   load();
 }
 
@@ -142,6 +167,7 @@ onMounted(() => {
   load();
   loadRetention();
 });
+onUnmounted(() => abortThumbs?.());
 </script>
 
 <template>
@@ -176,7 +202,7 @@ onMounted(() => {
       <div class="panel-head">
         <el-icon class="panel-icon"><Delete /></el-icon>
         <span class="panel-title">回收站</span>
-        <span class="panel-sub">删除的文件会先进入回收站，可恢复或彻底删除</span>
+        <span class="panel-sub">删除的文件会先进入回收站{{ retentionDays > 0 ? `，超过 ${retentionDays} 天自动清理` : '，不会自动清理' }}</span>
         <div class="head-right">
           <el-button size="small" @click="load"><el-icon><Refresh /></el-icon>&nbsp;刷新</el-button>
           <el-button size="small" type="success" :disabled="!selected.length" @click="doBatchRestore">
@@ -201,7 +227,8 @@ onMounted(() => {
         <el-table-column label="名称" min-width="220">
           <template #default="{ row }">
             <div class="file-cell">
-              <el-icon class="file-icon" :color="fileType(row).color">
+              <img v-if="thumbs[row.path]" :src="thumbs[row.path]" class="file-thumb" :alt="row.name" loading="lazy" />
+              <el-icon v-else class="file-icon" :color="fileType(row).color">
                 <component :is="fileType(row).icon" />
               </el-icon>
               <span class="file-name">{{ row.name }}</span>
@@ -221,12 +248,25 @@ onMounted(() => {
         <el-table-column label="删除时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.deleted_at) }}</template>
         </el-table-column>
+        <el-table-column label="剩余保留" width="110">
+          <template #default="{ row }">
+            <span class="status-badge" :class="remainInfo(row).cls">{{ remainInfo(row).text }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="170">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="doRestore(row)">恢复</el-button>
             <el-button link type="danger" size="small" @click="doDelete(row)">彻底删除</el-button>
           </template>
         </el-table-column>
+        <!-- 空态：替代默认的"暂无数据"文案 -->
+        <template #empty>
+          <div class="recycle-empty">
+            <el-icon :size="36"><Delete /></el-icon>
+            <div class="recycle-empty-title">回收站是空的</div>
+            <div class="recycle-empty-sub">删除的文件会先来到这里，可随时恢复或彻底删除</div>
+          </div>
+        </template>
       </el-table>
     </div>
   </div>
@@ -337,12 +377,39 @@ onMounted(() => {
   font-size: 18px;
   flex-shrink: 0;
 }
+.file-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--glass-border);
+}
 .file-name {
   font-weight: 500;
   color: var(--text);
 }
 .muted {
   color: var(--text-secondary);
+  font-size: 12px;
+}
+.recycle-empty {
+  padding: 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.recycle-empty .el-icon {
+  opacity: 0.4;
+}
+.recycle-empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+.recycle-empty-sub {
   font-size: 12px;
 }
 </style>

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests (server)
+        working-directory: apps/server
+        run: pnpm test
+
+      - name: Run tests (sync engine)
+        working-directory: apps/sync
+        run: pnpm test
+
+      - name: Run tests (web)
+        working-directory: apps/web
+        run: pnpm test
+
+      - name: Build server
+        working-directory: apps/server
+        run: pnpm build
+
+      - name: Build web
+        working-directory: apps/web
+        run: pnpm build
+
+      - name: Build sync CLI
+        working-directory: apps/sync
+        run: pnpm build
+
+  docker:
+    name: Docker image (master only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Dockerfile 为多阶段构建（内部自行 pnpm install + build），直接整仓构建即可
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

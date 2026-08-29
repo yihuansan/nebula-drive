@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, nextTick, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api, fmtTime } from '../../api';
+import { api, fmtTime, downloadFile } from '../../api';
 
 const activeTab = ref<'op' | 'login'>('op');
 const size = ref(20);
@@ -89,6 +89,20 @@ function actMeta(action: string) {
   return ACTION_META[action] || { icon: 'Document', label: action, tone: 'gray' };
 }
 
+/* ---------- 导出 CSV（后端 /logs/export.csv，按当前 tab 导出） ---------- */
+const exporting = ref(false);
+async function doExport() {
+  exporting.value = true;
+  try {
+    await downloadFile('/logs/export.csv', { type: activeTab.value }, `logs-${activeTab.value}.csv`);
+    ElMessage.success('导出成功');
+  } catch (e: any) {
+    ElMessage.error(e.message || '导出失败');
+  } finally {
+    exporting.value = false;
+  }
+}
+
 onMounted(() => load(true));
 </script>
 
@@ -103,6 +117,9 @@ onMounted(() => load(true));
       </div>
       <div class="spacer" />
       <span class="count-chip">共 {{ data[activeTab].total }} 条</span>
+      <el-button size="small" :loading="exporting" :disabled="!data[activeTab].total" @click="doExport">
+        <el-icon><Download /></el-icon>&nbsp;导出 CSV
+      </el-button>
       <el-button type="danger" plain size="small" @click="doClear">清空日志</el-button>
     </div>
 
@@ -164,9 +181,10 @@ onMounted(() => load(true));
       <el-table-column label="User-Agent" min-width="220" prop="ua" show-overflow-tooltip />
       <el-table-column label="结果" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.success ? 'success' : 'danger'" size="small">
+          <span class="status-badge" :class="row.success ? 'ok' : 'danger'">
+            <i class="dot" />
             {{ row.success ? '成功' : '失败' }}
-          </el-tag>
+          </span>
         </template>
       </el-table-column>
     </el-table>
@@ -256,16 +274,20 @@ onMounted(() => load(true));
   color: var(--text-secondary);
 }
 
-/* ---------- 操作图标 + 色调 ---------- */
+/* ---------- 操作图标 + 色调（胶囊徽章） ---------- */
 .act {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
 }
 .act :deep(.el-icon) {
-  font-size: 15px;
+  font-size: 14px;
 }
 .act-blue {
   color: var(--accent);

@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Loading } from '@element-plus/icons-vue';
-import { api } from '../../api';
+import { api, fmtSize } from '../../api';
 
 const storages = ref<any[]>([]);
 const types = ref<any[]>([]);
@@ -45,6 +45,18 @@ const stats = computed(() => {
   const enabled = storages.value.filter((s) => s.enabled).length;
   return { total, enabled, disabled: total - enabled };
 });
+
+/* ---------- 容量条（复用 Stats 磁盘条样式） ---------- */
+function capPercent(row: any): number {
+  if (!row.quota) return 0;
+  return Math.min(100, Math.max(0, Math.round(((row.used || 0) / row.quota) * 100)));
+}
+function capColor(row: any): string {
+  const pct = capPercent(row);
+  if (pct > 80) return '#ef4444';
+  if (pct > 50) return '#f59e0b';
+  return 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #ffffff))';
+}
 
 /* ---------- 新建 / 编辑 ---------- */
 const dialog = ref(false);
@@ -200,9 +212,9 @@ onMounted(load);
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="140">
+        <el-table-column label="类型" width="110">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ typeLabel(row.type) }}</el-tag>
+            <span class="status-badge neutral">{{ typeLabel(row.type) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="配置摘要" min-width="260">
@@ -218,11 +230,23 @@ onMounted(load);
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="容量" min-width="190">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'danger'" size="small">
+            <div v-if="row.quota" class="cap-cell">
+              <div class="cap-track">
+                <div class="cap-fill" :style="{ width: capPercent(row) + '%', background: capColor(row) }" />
+              </div>
+              <span class="cap-text">{{ capPercent(row) }}%</span>
+            </div>
+            <span v-else class="cap-text">{{ fmtSize(row.used || 0) }} · 不限</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <span class="status-badge" :class="row.enabled ? 'ok' : 'danger'">
+              <i class="dot" :class="{ pulse: row.enabled }" />
               {{ row.enabled ? '启用' : '停用' }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="操作" min-width="260">
@@ -395,5 +419,30 @@ onMounted(load);
   font-size: 12px;
   color: var(--text-secondary);
   word-break: break-all;
+}
+
+/* ---------- 容量条 ---------- */
+.cap-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cap-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+  overflow: hidden;
+}
+.cap-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.4s ease;
+}
+.cap-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 </style>

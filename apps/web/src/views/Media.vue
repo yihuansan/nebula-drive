@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { api, downloadFile, fmtSize, fmtTime } from '../api';
+import { api, downloadFile, fmtSize, fmtTime, loadThumbs } from '../api';
 import MediaHero from '../components/media/MediaHero.vue';
 import VideoCard from '../components/media/VideoCard.vue';
 import VideoPlayer, { type SubtitleTrack } from '../components/media/VideoPlayer.vue';
@@ -108,6 +108,7 @@ async function loadMedia() {
     audios.value = (aRes.entries || [])
       .filter((e: any) => !e.isDir)
       .map((e: any) => ({ path: e.path, name: e.name, size: e.size, mtime: e.mtime, ext: extOf(e.name) }));
+    startImageThumbs();
     startPosterCapture();
   } finally {
     loading.value = false;
@@ -116,8 +117,22 @@ async function loadMedia() {
 
 /* ---------------- 图片库 ---------------- */
 
-function thumbUrl(e: MediaEntry, size = 400): string {
-  return `/api/v1/files/thumbnail?storageId=${storageId.value}&path=${encodeURIComponent(e.path)}&size=${size}`;
+/* 缩略图修复：缩略图端点仅接受 Bearer 头，裸 <img src> 会 401；
+   改走 loadThumbs（带鉴权 fetch → blob URL） */
+const mediaThumbs = ref<Record<string, string>>({});
+let abortThumbs: (() => void) | null = null;
+function startImageThumbs() {
+  abortThumbs?.();
+  mediaThumbs.value = {};
+  const sid = storageId.value;
+  if (sid === null) return;
+  abortThumbs = loadThumbs(
+    images.value.map((e) => ({ storageId: sid, path: e.path })),
+    (path, url) => {
+      if (storageId.value === sid) mediaThumbs.value[path] = url;
+    },
+    400
+  );
 }
 const bigPreview = ref<MediaEntry | null>(null);
 function openImagePreview(e: MediaEntry) {
@@ -145,6 +160,29 @@ const filteredImages = computed(() => {
     else r = a.size - b.size;
     return sortOrder.value === 'asc' ? r : -r;
   });
+});
+
+/* 按修改时间分组（对标相册类产品：今天 / 本周 / 更早），写法对齐 Recent.vue 分组助手 */
+const groupByTime = ref(true);
+const imageGroups = computed(() => {
+  if (!groupByTime.value) return [{ title: '', items: filteredImages.value }];
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startWeek = startToday - 6 * 86400000;
+  const today: MediaEntry[] = [];
+  const week: MediaEntry[] = [];
+  const earlier: MediaEntry[] = [];
+  for (const e of filteredImages.value) {
+    const t = e.mtime || 0;
+    if (t >= startToday) today.push(e);
+    else if (t >= startWeek) week.push(e);
+    else earlier.push(e);
+  }
+  return [
+    { title: '今天', items: today },
+    { title: '本周', items: week },
+    { title: '更早', items: earlier },
+  ].filter((s) => s.items.length);
 });
 
 const filteredAudios = computed(() => {
@@ -318,6 +356,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   posterRunning = false;
+  abortThumbs?.();
 });
 </script>
 
@@ -336,10 +375,10 @@ onBeforeUnmount(() => {
           <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
         <el-radio-group v-model="mode">
-          <el-radio-button value="video">视频</el-radio-button>
-          <el-radio-button value="image">图片</el-radio-button>
-          <el-radio-button value="audio">音频</el-radio-button>
-          <el-radio-button value="document">文档</el-radio-button>
+          <el-radio-button value="video">视频<span class="mode-count">{{ videos.length }}</span></el-radio-button>
+          <el-radio-button value="image">图片<span class="mode-count">{{ images.length }}</span></el-radio-button>
+          <el-radio-button value="audio">音频<span class="mode-count">{{ audios.length }}</span></el-radio-button>
+          <el-radio-button value="document">文档<span class="mode-count">{{ docs.length }}</span></el-radio-button>
         </el-radio-group>
       </div>
     </div>
@@ -452,17 +491,44 @@ onBeforeUnmount(() => {
         <el-button @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'">
           {{ sortOrder === 'asc' ? '升序' : '降序' }}
         </el-button>
+        <el-button :type="groupByTime ? 'primary' : undefined" plain @click="groupByTime = !groupByTime">
+          时间分组
+        </el-button>
         <span class="nd-count">{{ filteredImages.length }} 张</span>
       </div>
 
-      <div class="nd-image-grid" v-if="filteredImages.length">
+      <!-- 时间分组视图（今天 / 本周 / 更早） -->
+      <template v-if="filteredImages.length && groupByTime">
+        <div v-for="sec in imageGroups" :key="sec.title" class="nd-image-group">
+          <div class="nd-group-title">{{ sec.title }}<span class="nd-group-count">{{ sec.items.length }}</span></div>
+          <div class="nd-image-grid">
+            <div
+              v-for="img in sec.items"
+              :key="img.path"
+              class="nd-image-card"
+              @click="openImagePreview(img)"
+            >
+              <img v-if="mediaThumbs[img.path]" :src="mediaThumbs[img.path]" :alt="img.name" loading="lazy" />
+              <div v-else class="nd-image-ph">
+                <el-icon :size="40"><Picture /></el-icon>
+              </div>
+              <div class="nd-image-name">{{ img.name }}</div>
+              <div class="nd-image-meta">{{ fmtSize(img.size) }}</div>
+            </div>
+          </div>
+        </div>
+      </template>
+      <div class="nd-image-grid" v-else-if="filteredImages.length">
         <div
           v-for="img in filteredImages"
           :key="img.path"
           class="nd-image-card"
           @click="openImagePreview(img)"
         >
-          <img :src="thumbUrl(img)" :alt="img.name" loading="lazy" />
+          <img v-if="mediaThumbs[img.path]" :src="mediaThumbs[img.path]" :alt="img.name" loading="lazy" />
+          <div v-else class="nd-image-ph">
+            <el-icon :size="40"><Picture /></el-icon>
+          </div>
           <div class="nd-image-name">{{ img.name }}</div>
           <div class="nd-image-meta">{{ fmtSize(img.size) }}</div>
         </div>
@@ -615,6 +681,33 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 图片时间分组标题 */
+.nd-image-group + .nd-image-group {
+  margin-top: 8px;
+}
+.nd-group-title {
+  margin: 18px 24px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nd-group-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border: 1px solid var(--glass-border);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.nd-image-group .nd-image-grid {
+  margin-top: 12px;
+}
+
 .nd-image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -645,6 +738,19 @@ onBeforeUnmount(() => {
   aspect-ratio: 1;
   object-fit: cover;
   display: block;
+}
+/* 缩略图加载前/失败时的图标底（保持 1:1 占位，避免卡片跳变） */
+.nd-image-ph {
+  width: 100%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: linear-gradient(
+    135deg,
+    var(--accent-soft),
+    color-mix(in srgb, var(--accent) 10%, transparent)
+  );
 }
 .nd-image-name {
   font-size: 13px;
@@ -764,5 +870,17 @@ onBeforeUnmount(() => {
 .nd-doc-download:hover {
   background: var(--accent);
   color: #fff;
+}
+
+/* 媒体模式切换计数徽章 */
+.mode-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font-variant-numeric: tabular-nums;
 }
 </style>

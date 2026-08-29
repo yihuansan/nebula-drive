@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api, fmtTime } from '../api';
+import PageHeader from '../components/PageHeader.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const tab = ref<'created' | 'received'>('created');
 const createdItems = ref<any[]>([]);
@@ -134,6 +136,7 @@ const permLabel = (p: string) => {
     default: return p;
   }
 };
+const permBadge = (p: string) => (p === 'manage' ? 'danger' : p === 'download' ? 'warn' : 'info');
 
 onMounted(() => {
   loadCreated();
@@ -142,18 +145,20 @@ onMounted(() => {
 
 <template>
   <div class="share-collab-page">
-    <div class="page-header glass">
-      <h2>共享管理</h2>
-    </div>
+    <PageHeader
+      icon="User"
+      title="共享管理"
+      subtitle="与指定用户共享文件，按人分配权限并追踪活动"
+    />
 
     <el-tabs v-model="tab" @tab-change="onTabChange">
       <!-- 我创建的共享 -->
       <el-tab-pane label="我共享的" name="created">
-        <div v-if="createdItems.length === 0" class="empty-state">
-          <el-icon :size="64"><Share /></el-icon>
-          <p>暂无共享</p>
-          <p class="tip">在文件管理中右键文件/文件夹，选择「共享给用户」创建共享</p>
-        </div>
+        <EmptyState
+          v-if="createdItems.length === 0"
+          title="暂无共享"
+          description="在文件管理中右键文件/文件夹，选择「共享给用户」创建共享"
+        />
         <el-table v-else :data="createdItems" v-loading="loading" style="width: 100%">
           <el-table-column prop="name" label="名称" min-width="160" />
           <el-table-column prop="path" label="路径" min-width="200" />
@@ -179,18 +184,19 @@ onMounted(() => {
 
       <!-- 共享给我的 -->
       <el-tab-pane label="共享给我的" name="received">
-        <div v-if="receivedItems.length === 0" class="empty-state">
-          <el-icon :size="64"><Folder /></el-icon>
-          <p>暂无共享给我的内容</p>
-        </div>
+        <EmptyState
+          v-if="receivedItems.length === 0"
+          title="暂无共享给我的内容"
+          description="别人通过「共享给用户」分享给你的内容会出现在这里"
+        />
         <el-table v-else :data="receivedItems" v-loading="loading" style="width: 100%">
           <el-table-column prop="name" label="名称" min-width="160" />
           <el-table-column prop="path" label="路径" min-width="200" />
           <el-table-column label="权限" width="120">
             <template #default="{ row }">
-              <el-tag :type="row.permission === 'manage' ? 'danger' : row.permission === 'download' ? 'warning' : 'info'" size="small">
+              <span class="status-badge" :class="permBadge(row.permission)">
                 {{ permLabel(row.permission) }}
-              </el-tag>
+              </span>
             </template>
           </el-table-column>
           <el-table-column prop="expires_at" label="有效期" width="120">

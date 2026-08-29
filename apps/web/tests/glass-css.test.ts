@@ -104,3 +104,37 @@ describe('glass.css 全局设计令牌', () => {
     });
   });
 });
+
+describe('默认主题 2026 焕新', () => {
+  it('light-glass 采用多层径向 mesh 渐变', () => {
+    expect(css).toMatch(/\[data-theme='light-glass'\]\s*\{[^}]*radial-gradient/s);
+  });
+
+  it('dark-glass 采用多层径向 mesh 渐变', () => {
+    expect(css).toMatch(/\[data-theme='dark-glass'\]\s*\{[^}]*radial-gradient/s);
+  });
+
+  it('默认主题定义双色 --accent-2', () => {
+    expect(css).toMatch(/\[data-theme='light-glass'\][^}]*--accent-2:/s);
+    expect(css).toMatch(/\[data-theme='dark-glass'\][^}]*--accent-2:/s);
+  });
+
+  it('mesh 背景漂移动画已定义且尊重减弱动效', () => {
+    expect(css).toMatch(/@keyframes mesh-drift/);
+    expect(css).toMatch(/animation:\s*mesh-drift/);
+    expect(css).toMatch(/prefers-reduced-motion:\s*reduce/);
+  });
+
+  it('默认主题主按钮使用双色渐变', () => {
+    expect(css).toMatch(/linear-gradient\(135deg,\s*var\(--accent\),\s*var\(--accent-2\)\)/);
+  });
+
+  it('全部主题均配备浮层实心底 --glass-bg-solid', () => {
+    const blocks = [...css.matchAll(/\[data-theme='([a-z0-9-]+)'\]\s*\{/g)].map((m) => m[1]);
+    const themes = [...new Set(blocks)];
+    expect(themes.length).toBeGreaterThanOrEqual(20);
+    for (const t of themes) {
+      expect(css, `主题 ${t} 缺少 --glass-bg-solid`).toContain(`[data-theme='${t}'] { --glass-bg-solid:`);
+    }
+  });
+});

@@ -7,6 +7,8 @@ import {
   verifyCode,
   generateRecoveryCodes,
   getOtpAuthUri,
+  hashRecoveryCode,
+  matchRecoveryCode,
 } from '../services/totp.service.js';
 import { encryptField, decryptFieldIfEncrypted } from '../utils/crypto.js';
 
@@ -68,9 +70,9 @@ export async function twoFactorRoutes(app: FastifyInstance) {
       return fail(reply, 400, '验证码错误');
     }
 
-    // 生成恢复码并启用
+    // 生成恢复码并启用（仅存 sha256 哈希，明文只在本次响应中展示一次）
     const recoveryCodes = generateRecoveryCodes(10);
-    const codesJson = JSON.stringify(recoveryCodes);
+    const codesJson = JSON.stringify(recoveryCodes.map(hashRecoveryCode));
     db.prepare('UPDATE user_2fa SET enabled = 1, recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
       .run(codesJson, userId);
 
@@ -94,16 +96,17 @@ export async function twoFactorRoutes(app: FastifyInstance) {
     return ok(reply, { enabled: false });
   });
 
-  /** 获取恢复码（已启用时） */
+  /** 获取恢复码（已启用时）：仅返回历史明文码；新恢复码以哈希存储，无法再次查看 */
   app.get('/2fa/recovery-codes', { preHandler: authMiddleware }, async (req, reply) => {
     const db = getDb();
     const row = db.prepare('SELECT * FROM user_2fa WHERE user_id = ? AND enabled = 1').get(req.user!.sub) as any;
     if (!row) return fail(reply, 400, '2FA 未启用');
     try {
-      const codes = JSON.parse(row.recovery_codes || '[]');
-      return ok(reply, { codes });
+      const codes: string[] = JSON.parse(row.recovery_codes || '[]');
+      const visible = codes.filter((c) => !/^[0-9a-f]{64}$/i.test(String(c)));
+      return ok(reply, { codes: visible, hiddenHashed: codes.length - visible.length });
     } catch {
-      return ok(reply, { codes: [] });
+      return ok(reply, { codes: [], hiddenHashed: 0 });
     }
   });
 
@@ -122,12 +125,11 @@ export async function twoFactorRoutes(app: FastifyInstance) {
       return ok(reply, { verified: true, method: 'totp' });
     }
 
-    // 再检查恢复码
+    // 再检查恢复码（库内存 sha256 哈希，兼容历史明文；命中后消耗）
     try {
       const codes: string[] = JSON.parse(row.recovery_codes || '[]');
-      const idx = codes.indexOf(code.toUpperCase());
+      const idx = matchRecoveryCode(codes, code);
       if (idx !== -1) {
-        // 使用一个恢复码后移除
         codes.splice(idx, 1);
         db.prepare('UPDATE user_2fa SET recovery_codes = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
           .run(JSON.stringify(codes), userId);

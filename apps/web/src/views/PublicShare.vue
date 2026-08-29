@@ -84,10 +84,16 @@ function openDir(e: any) {
 }
 
 /* 锚点跳转，浏览器原生流式下载（不经过 JS 缓冲，大文件也不会 Failed to fetch） */
+const downloadingPath = ref('');
 function download(e: any) {
+  downloadingPath.value = e.path || '';
   const a = document.createElement('a');
   a.href = `/api/v1/s/${token}/download?ticket=${encodeURIComponent(ticket.value)}&path=${encodeURIComponent(e.path)}`;
   a.click();
+  // 锚点下载无法感知完成，短暂展示发起中状态后恢复（主流网盘同款交互）
+  setTimeout(() => {
+    if (downloadingPath.value === (e.path || '')) downloadingPath.value = '';
+  }, 2500);
 }
 
 /* ---------- 分享转存 ---------- */
@@ -163,9 +169,13 @@ onMounted(loadShare);
           <div class="hero-info">
             <div class="hero-name">{{ share.name }}</div>
             <div class="hero-chips">
-              <span class="chip">
+              <span class="chip" :class="share.expiresAt ? '' : 'chip-ok'">
                 <el-icon><Clock /></el-icon>
                 {{ share.expiresAt ? '有效期至 ' + fmtTime(share.expiresAt) : '长期有效' }}
+              </span>
+              <span v-if="share.hasPassword" class="chip chip-lock">
+                <el-icon><Lock /></el-icon>
+                需提取码
               </span>
               <span v-if="share.maxDownloads" class="chip">
                 <el-icon><Odometer /></el-icon>
@@ -208,11 +218,11 @@ onMounted(loadShare);
                 <el-icon><Refresh /></el-icon>
               </el-button>
             </div>
-            <div v-loading="loading" class="file-grid">
+            <div v-loading="loading" class="file-grid page-enter-stagger">
               <div
                 v-for="row in entries"
                 :key="row.path"
-                class="file-card glass-card"
+                class="file-card glass-card hover-lift"
                 @click="openDir(row)"
               >
                 <div class="fc-icon">
@@ -225,7 +235,9 @@ onMounted(loadShare);
                 <div class="fc-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
                 <div class="fc-actions" @click.stop>
                   <el-tooltip v-if="!row.isDir" content="下载" placement="top" :show-after="300">
-                    <el-button link @click="download(row)"><el-icon><Download /></el-icon></el-button>
+                    <el-button link :loading="downloadingPath === row.path" @click="download(row)">
+                      <el-icon><Download /></el-icon>
+                    </el-button>
                   </el-tooltip>
                 </div>
               </div>
@@ -244,8 +256,13 @@ onMounted(loadShare);
             </div>
             <div class="fs-name">{{ share.name }}</div>
             <div class="fs-meta">{{ fmtSize(share.size || 0) }}</div>
-            <el-button class="fs-download" @click="download({ name: share?.name, path: share?.path })">
-              <el-icon><Download /></el-icon>&nbsp;下载文件
+            <el-button
+              class="fs-download"
+              :loading="downloadingPath === share?.path"
+              @click="download({ name: share?.name, path: share?.path })"
+            >
+              <template v-if="downloadingPath !== share?.path"><el-icon><Download /></el-icon>&nbsp;</template>
+              {{ downloadingPath === share?.path ? '下载发起中…' : '下载文件' }}
             </el-button>
           </div>
         </template>
@@ -390,6 +407,22 @@ onMounted(loadShare);
 }
 .chip .el-icon {
   color: var(--accent);
+}
+.chip-ok {
+  color: #16a34a;
+  border-color: color-mix(in srgb, #16a34a 35%, transparent);
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+}
+.chip-ok .el-icon {
+  color: #16a34a;
+}
+.chip-lock {
+  color: #d97706;
+  border-color: color-mix(in srgb, #d97706 35%, transparent);
+  background: color-mix(in srgb, #d97706 12%, transparent);
+}
+.chip-lock .el-icon {
+  color: #d97706;
 }
 
 /* ---------- 密码门 ---------- */

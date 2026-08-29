@@ -65,7 +65,7 @@ async function doRegister() {
     // 自动登录
     auth.token = r.token;
     auth.user = r.user;
-    router.push('/');
+    router.push('/dashboard');
   } catch (e: any) {
     ElMessage.error(e.message || '注册失败');
   } finally {
@@ -100,6 +100,13 @@ async function loadBrand() {
   }
 }
 onMounted(loadBrand);
+
+/* ---------- 左侧品牌展示区数据 ---------- */
+const heroFeatures = [
+  { icon: 'Box', text: '多存储统一管理', desc: '本地 / 网络存储聚合，一处浏览与管理' },
+  { icon: 'Share', text: '一键分享协作', desc: '生成分享链接，支持密码保护与有效期控制' },
+  { icon: 'Lock', text: '双重认证防护', desc: 'TOTP 动态码与恢复码，守护账号安全' },
+];
 
 /* ---------- 2FA 相关 ---------- */
 const twoFaRequired = ref(false);
@@ -141,7 +148,7 @@ async function doLogin() {
     auth.user = r.user;
     localStorage.setItem('nebula_token', r.token);
     ElMessage.success('登录成功');
-    router.push('/');
+    router.push('/dashboard');
   } catch (e: any) {
     // 检查是否需要验证码
     const data = e.data || {};
@@ -176,7 +183,7 @@ async function doTwoFaLogin() {
     auth.user = r.user;
     localStorage.setItem('nebula_token', r.token);
     ElMessage.success('登录成功');
-    router.push('/');
+    router.push('/dashboard');
   } catch (e: any) {
     twoFaError.value = e.message || '2FA 验证失败';
   } finally {
@@ -187,7 +194,32 @@ async function doTwoFaLogin() {
 
 <template>
   <div class="login-page">
-    <div class="login-card">
+    <div class="login-split">
+      <!-- 左侧：品牌展示区（窄屏隐藏，回落为单栏卡片） -->
+      <div class="login-hero">
+        <div class="hero-logo">
+          <img
+            v-if="brand.logo"
+            :src="brand.logo"
+            alt="logo"
+            @error="($event.target as HTMLImageElement).style.display = 'none'"
+          />
+          <el-icon v-else :size="34"><Cloudy /></el-icon>
+        </div>
+        <h1 class="hero-title">{{ brand.appName }}</h1>
+        <p class="hero-sub">{{ brand.aboutText || '多存储统一管理平台' }}</p>
+        <div class="hero-features">
+          <div v-for="f in heroFeatures" :key="f.text" class="hero-feature">
+            <span class="hf-icon"><el-icon :size="18"><component :is="f.icon" /></el-icon></span>
+            <div>
+              <div class="hf-title">{{ f.text }}</div>
+              <div class="hf-desc">{{ f.desc }}</div>
+            </div>
+          </div>
+        </div>
+        <div v-if="brand.copyright" class="hero-copyright">{{ brand.copyright }}</div>
+      </div>
+      <div class="login-card">
       <div class="brand">
         <img v-if="brand.logo" :src="brand.logo" class="brand-logo" alt="logo" @error="($event.target as HTMLImageElement).style.display = 'none'" />
         <el-icon v-else :size="42" color="var(--accent)"><Cloudy /></el-icon>
@@ -293,6 +325,7 @@ async function doTwoFaLogin() {
       <div v-if="brand.copyright" class="copyright">{{ brand.copyright }}</div>
       <div v-if="brand.contactEmail" class="contact">{{ brand.contactEmail }}</div>
     </div>
+    </div>
   </div>
 </template>
 
@@ -363,6 +396,119 @@ async function doTwoFaLogin() {
   border-radius: 0 0 6px 6px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   opacity: 0.7;
+}
+
+/* ---------- 分屏布局：左品牌展示 + 右登录卡片 ---------- */
+.login-split {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 64px;
+  width: 100%;
+  max-width: 1040px;
+  padding: 0 40px;
+}
+.login-hero {
+  flex: 1;
+  min-width: 0;
+  animation: login-in 0.6s var(--ease-smooth) both;
+}
+.hero-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2, var(--accent)));
+  box-shadow: 0 16px 40px var(--accent-soft), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  margin-bottom: 22px;
+}
+.hero-logo img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+.hero-title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: linear-gradient(120deg, var(--text) 30%, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.hero-sub {
+  margin: 10px 0 30px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+.hero-features {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hero-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(160%);
+  transition: transform 0.25s var(--ease-smooth), border-color 0.25s var(--ease-smooth);
+}
+.hero-feature:hover {
+  transform: translateX(4px);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.hf-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--glass-border);
+}
+.hf-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.hf-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.hero-copyright {
+  margin-top: 28px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+/* 宽屏：左侧已展示品牌，卡片内品牌区隐藏避免重复 */
+@media (min-width: 900px) {
+  .login-card .brand {
+    display: none;
+  }
+}
+/* 窄屏：隐藏左栏，回落单栏 */
+@media (max-width: 900px) {
+  .login-hero {
+    display: none;
+  }
+  .login-split {
+    padding: 0 16px;
+  }
 }
 .brand {
   text-align: center;

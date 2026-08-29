@@ -162,7 +162,9 @@ export const fileService = {
             if (e.isDir) return false; // 目录不参与过滤
             if (filters.type) {
               const ext = e.name.split('.').pop()?.toLowerCase() || '';
-              if (ext !== filters.type.toLowerCase()) return false;
+              // 支持单扩展名或逗号分隔的扩展名列表（如 "jpg,png,gif"）
+              const types = filters.type.toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
+              if (types.length && !types.includes(ext)) return false;
             }
             if (filters.minSize !== undefined && e.size < filters.minSize) return false;
             if (filters.maxSize !== undefined && e.size > filters.maxSize) return false;

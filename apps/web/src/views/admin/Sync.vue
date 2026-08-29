@@ -33,6 +33,17 @@ const MODE_META: Record<string, { label: string; icon: string; color: string; ta
 function modeInfo(mode: string) {
   return MODE_META[mode] || { label: mode, icon: 'Sort', color: '#94a3b8', tag: 'info' };
 }
+const TAG_BADGE: Record<string, string> = { success: 'ok', warning: 'warn', info: 'info', danger: 'danger' };
+function modeBadge(mode: string) {
+  return TAG_BADGE[modeInfo(mode).tag] || 'info';
+}
+
+/* 同步任务状态（服务端未返回运行时字段时展示空闲） */
+function syncState(row: any): { label: string; cls: string; pulse: boolean } {
+  if (row.error || row.last_error) return { label: '错误', cls: 'danger', pulse: false };
+  if (row.running || row.syncing) return { label: '运行中', cls: 'warn', pulse: true };
+  return { label: '空闲', cls: 'ok', pulse: false };
+}
 
 const stats = computed(() => {
   const total = pairs.value.length;
@@ -147,14 +158,14 @@ onMounted(load);
         </div>
       </div>
 
-      <div v-loading="loading" class="sync-grid">
+      <div v-loading="loading" class="sync-grid page-enter-stagger">
         <div v-if="!pairs.length && !loading" class="empty">
           <el-icon :size="48" class="empty-icon"><Sort /></el-icon>
           <p>暂无同步对</p>
           <p class="empty-sub">创建同步对后，将 Token 配置到同步客户端即可开始同步</p>
         </div>
 
-        <div v-for="row in pairs" :key="row.id" class="sync-card">
+        <div v-for="row in pairs" :key="row.id" class="sync-card hover-lift">
           <div class="sync-head">
             <div class="sync-badge" :style="{ background: modeInfo(row.mode).color }">
               <el-icon><component :is="modeInfo(row.mode).icon" /></el-icon>
@@ -163,7 +174,11 @@ onMounted(load);
               <div class="sync-name">{{ storageName(row.storage_id) }}</div>
               <div class="sync-path">{{ row.remote_path }}</div>
             </div>
-            <el-tag size="small" :type="modeInfo(row.mode).tag">{{ modeInfo(row.mode).label }}</el-tag>
+            <span class="status-badge" :class="syncState(row).cls">
+              <i class="dot" :class="{ pulse: syncState(row).pulse }" />
+              {{ syncState(row).label }}
+            </span>
+            <span class="status-badge" :class="modeBadge(row.mode)">{{ modeInfo(row.mode).label }}</span>
             <el-button link type="danger" size="small" @click="doDelete(row)">删除</el-button>
           </div>
 

@@ -294,27 +294,6 @@ export async function fileRoutes(app: FastifyInstance) {
         }
       }
       const stream = await driver.download(p, range);
-      // 诊断日志：追踪流的生命周期 + 实际发送字节数
-      const streamLabel = `[preview:${p.split('/').pop()}]`;
-      const t0 = Date.now();
-      let bytesSent = 0;
-      stream.on('open', (fd: any) => {
-        console.log(`${streamLabel} OPEN fd=${fd} range=${range ? `${range.start}-${range.end}` : 'full'} total=${total} t=0ms`);
-      });
-      stream.on('data', (chunk: Buffer) => {
-        bytesSent += chunk.length;
-      });
-      stream.on('close', () => {
-        console.log(`${streamLabel} CLOSED bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
-      });
-      stream.on('error', (err: Error) => {
-        console.log(`${streamLabel} STREAM_ERROR: ${err.message} bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
-      });
-      reply.raw.on('close', () => {
-        console.log(`${streamLabel} RAW_CLOSED bytesSent=${bytesSent} t=${Date.now() - t0}ms`);
-      });
-      // 记录请求头（诊断用）
-      console.log(`${streamLabel} REQUEST headers=${JSON.stringify({ range: req.headers.range, ua: (req.headers['user-agent'] || '').slice(0, 80), accept: req.headers.accept })}`);
       // 根据文件扩展名设置正确的 Content-Type
       const ext = p.split('.').pop()?.toLowerCase() || '';
       const MIME_MAP: Record<string, string> = {
@@ -340,7 +319,17 @@ export async function fileRoutes(app: FastifyInstance) {
       };
       const contentType = MIME_MAP[ext] || 'application/octet-stream';
       reply.header('Content-Type', contentType);
-      reply.header('Content-Disposition', `inline; filename="${encodeURIComponent(p.split('/').pop() || 'file')}"`);
+      // 同源内容隔离（防存储型 XSS）：
+      // 1) CSP sandbox 阻断脚本/表单/弹窗（不影响图片/音视频播放）；
+      // 2) 可执行脚本的标记语言（html/svg/xml 等）强制下载，杜绝同源内联执行。
+      reply.header('Content-Security-Policy', "sandbox");
+      reply.header('X-Content-Type-Options', 'nosniff');
+      const DANGEROUS_INLINE_EXTS = new Set(['html', 'htm', 'xhtml', 'svg', 'xml', 'js', 'mjs', 'mhtml', 'mht']);
+      if (DANGEROUS_INLINE_EXTS.has(ext)) {
+        reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(p.split('/').pop() || 'file')}`);
+      } else {
+        reply.header('Content-Disposition', `inline; filename="${encodeURIComponent(p.split('/').pop() || 'file')}"`);
+      }
       reply.header('Cache-Control', 'private, max-age=3600');
       reply.header('Accept-Ranges', 'bytes');
       if (range) {
@@ -502,8 +491,8 @@ export async function fileRoutes(app: FastifyInstance) {
     return ok(reply, { path: `/${zipName}`, name: zipName });
   });
 
-  // ===== 解压：将 zip 文件解压到指定目录 =====
-  app.post('/files/decompress', { preHandler: requirePermission('files:view') }, async (req, reply) => {
+  // ===== 解压：将 zip 文件解压到指定目录（磁盘写操作，需 files:write） =====
+  app.post('/files/decompress', { preHandler: requirePermission('files:write') }, async (req, reply) => {
     const b = req.body as { storageId?: number; path?: string; destPath?: string };
     if (!b.path) return fail(reply, 400, '缺少 zip 文件路径');
     const storageId = b.storageId || 0;

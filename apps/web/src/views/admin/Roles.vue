@@ -93,7 +93,7 @@ function count(roleKey: string): number {
               <th v-for="role in roles" :key="role.key" class="role-col">
                 <div class="role-head">
                   <span>{{ role.label }}</span>
-                  <el-tag size="small" type="info">{{ count(role.key) }} 项</el-tag>
+                  <span class="status-badge info role-count">{{ count(role.key) }} 项权限</span>
                 </div>
               </th>
             </tr>
@@ -208,6 +208,9 @@ function count(roleKey: string): number {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.role-count {
+  font-variant-numeric: tabular-nums;
 }
 .module-row .module-label {
   font-weight: 700;

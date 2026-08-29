@@ -7,9 +7,9 @@ import { fileIndex } from '../services/fileIndex.service.js';
 import { usageCache } from '../services/usageCache.service.js';
 import { getDriver } from '../storage/registry.js';
 
-/** by-type 结果缓存：递归扫描成本高，按 storageId+type 缓存 5 分钟 */
+/** by-type 结果缓存：递归扫描成本高，按 storageId+type 缓存 30 秒（兼顾新鲜度与扫描成本） */
 const byTypeCache = new Map<string, { at: number; entries: any[] }>();
-const BY_TYPE_TTL = 5 * 60 * 1000;
+const BY_TYPE_TTL = 30 * 1000;
 
 export async function newFeaturesRoutes(app: FastifyInstance) {
   // 按文件类型搜索（视频/文档）

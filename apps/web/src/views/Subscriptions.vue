@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { ElMessage } from 'element-plus';
+import PageHeader from '../components/PageHeader.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const loading = ref(false);
 const subscriptions = ref<any[]>([]);
@@ -92,17 +94,22 @@ function fmtTime(ts: string) {
 
 <template>
   <div class="subs-page">
-    <div class="page-header glass">
-      <h2>转存和订阅</h2>
-      <el-button type="primary" @click="openTransfer">
-        <el-icon><Download /></el-icon>&nbsp;转存分享
-      </el-button>
-    </div>
+    <PageHeader
+      icon="Download"
+      title="转存和订阅"
+      subtitle="订阅他人分享，新内容自动同步；把分享文件一键转存到自己的网盘"
+    >
+      <template #actions>
+        <el-button type="primary" @click="openTransfer">
+          <el-icon><Download /></el-icon>&nbsp;转存分享
+        </el-button>
+      </template>
+    </PageHeader>
 
     <el-tabs v-model="activeTab">
       <el-tab-pane label="我的订阅" name="subscriptions">
-        <div class="subs-list" v-loading="loading">
-          <div v-for="sub in subscriptions" :key="sub.id" class="sub-item glass-card">
+        <div class="subs-list page-enter-stagger" v-loading="loading">
+          <div v-for="(sub, i) in subscriptions" :key="sub.id" class="sub-item glass-card hover-lift" :style="{ '--i': i }">
             <el-icon :size="28" color="#409eff"><Share /></el-icon>
             <div class="sub-info">
               <div class="sub-title">{{ sub.title }}</div>
@@ -111,19 +118,19 @@ function fmtTime(ts: string) {
                 <span>· 创建于 {{ fmtTime(sub.createdAt) }}</span>
               </div>
             </div>
-            <el-tag v-if="sub.autoRefresh" type="success" size="small">自动刷新</el-tag>
+            <span v-if="sub.autoRefresh" class="status-badge ok"><i class="dot pulse" />自动刷新</span>
           </div>
-          <div v-if="!loading && !subscriptions.length" class="empty">
-            <el-icon :size="36"><Share /></el-icon>
-            <h3>暂无订阅</h3>
-            <p>还没有订阅任何分享，转存分享后即可在此查看更新</p>
-          </div>
+          <EmptyState
+            v-if="!loading && !subscriptions.length"
+            title="暂无订阅"
+            description="还没有订阅任何分享，转存分享后即可在此查看更新"
+          />
         </div>
       </el-tab-pane>
 
       <el-tab-pane label="转存记录" name="transfers">
-        <div class="transfer-list" v-loading="loading">
-          <div v-for="t in transferHistory" :key="t.id" class="transfer-item glass-card">
+        <div class="transfer-list page-enter-stagger" v-loading="loading">
+          <div v-for="(t, i) in transferHistory" :key="t.id" class="transfer-item glass-card hover-lift" :style="{ '--i': i }">
             <el-icon :size="28" color="#16a34a"><Download /></el-icon>
             <div class="transfer-info">
               <div class="transfer-title">{{ t.title }}</div>
@@ -133,11 +140,11 @@ function fmtTime(ts: string) {
               </div>
             </div>
           </div>
-          <div v-if="!loading && !transferHistory.length" class="empty">
-            <el-icon :size="36"><Download /></el-icon>
-            <h3>暂无转存记录</h3>
-            <p>使用"转存分享"功能后，记录会显示在这里</p>
-          </div>
+          <EmptyState
+            v-if="!loading && !transferHistory.length"
+            title="暂无转存记录"
+            description="使用「转存分享」功能后，记录会显示在这里"
+          />
         </div>
       </el-tab-pane>
     </el-tabs>

@@ -3,8 +3,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { api, fmtSize } from './api';
-import { useTheme, THEMES, type ThemeKey } from './useTheme';
+import { useTheme, THEMES, THEME_GROUPS, type ThemeKey, type ThemeGroup } from './useTheme';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import TransferCenter from './components/TransferCenter.vue';
+import CommandPalette from './components/CommandPalette.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -53,8 +55,14 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onDrawerEsc);
 });
 
-// 主题选择器选项（来自 useTheme 的 THEMES 元数据）
-const themeOptions = Object.entries(THEMES).map(([key, v]) => ({ key, ...v }));
+// 主题选择器选项（来自 useTheme 的 THEMES 元数据，按分组展示）
+const themeGroups = (Object.keys(THEME_GROUPS) as ThemeGroup[]).map((g) => ({
+  key: g,
+  label: THEME_GROUPS[g],
+  options: (Object.keys(THEMES) as ThemeKey[])
+    .filter((k) => THEMES[k].group === g)
+    .map((k) => ({ key: k, ...THEMES[k] })),
+}));
 
 // 点击主题选择器外部时关闭
 function onDocClick(e: MouseEvent) {
@@ -69,6 +77,13 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick);
 });
+
+/* 命令面板快捷动作：打开主题选择器（由 CommandPalette 派发自定义事件） */
+function onOpenThemePicker() {
+  showThemePicker.value = true;
+}
+onMounted(() => window.addEventListener('nd:open-theme-picker', onOpenThemePicker));
+onUnmounted(() => window.removeEventListener('nd:open-theme-picker', onOpenThemePicker));
 
 // 更新检查状态
 const updateInfo = ref<{ currentVersion: string; latestVersion: string; isUpdateAvailable: boolean; releaseNotes: string; publishedAt: string } | null>(null);
@@ -186,6 +201,7 @@ const pageTitle = computed(() => {
     '/quick-access': '快捷访问',
     '/media': '媒体库',
     '/hidden': '隐藏空间',
+    '/tags': '标签',
     '/subscriptions': '转存和订阅',
     '/shares': '共享',
     '/recycle': '回收站',
@@ -203,12 +219,14 @@ const pageTitle = computed(() => {
 
 // 侧边栏菜单（perm = 所需权限点；无 perm 的项始终显示）
 const mainMenuAll = [
+  { path: '/dashboard', label: '工作台', icon: 'HomeFilled', perm: 'files:view' },
   { path: '/', label: '我的文件', icon: 'Folder', perm: 'files:view' },
   { path: '/recent', label: '最近', icon: 'Clock', perm: 'files:view' },
   { path: '/favorites', label: '我的收藏', icon: 'StarFilled', perm: 'files:view' },
   { path: '/quick-access', label: '快捷访问', icon: 'Star', perm: 'files:view' },
   { path: '/media', label: '媒体库', icon: 'VideoCamera', perm: 'files:view' },
   { path: '/hidden', label: '隐藏空间', icon: 'Lock', perm: 'files:view' },
+  { path: '/tags', label: '标签', icon: 'PriceTag', perm: 'files:view' },
   { path: '/subscriptions', label: '转存和订阅', icon: 'Download', perm: 'files:share' },
   { path: '/shares', label: '共享', icon: 'Share', perm: 'files:share' },
   { path: '/share-collab', label: '共享管理', icon: 'User', perm: 'files:share' },
@@ -279,7 +297,8 @@ const orderedMainMenu = computed(() => {
 
 /* 侧边栏导航分组（对标主流网盘：文件区 / 分享协作 / 空间工具），组内仍按自定义排序 */
 const NAV_GROUPS: { label: string; paths: Set<string> }[] = [
-  { label: '空间', paths: new Set(['/', '/recent', '/favorites', '/quick-access', '/media', '/hidden']) },
+  { label: '总览', paths: new Set(['/dashboard']) },
+  { label: '空间', paths: new Set(['/', '/recent', '/favorites', '/quick-access', '/media', '/hidden', '/tags']) },
   { label: '分享协作', paths: new Set(['/subscriptions', '/shares', '/share-collab']) },
   { label: '更多', paths: new Set(['/recycle', '/profile']) },
 ];
@@ -573,17 +592,21 @@ function applyBackground(s?: any) {
                 <span class="theme-dot">{{ THEMES[theme]?.icon }}</span>
               </button>
               <div v-if="showThemePicker" class="theme-picker glass">
-                <button
-                  v-for="t in themeOptions"
-                  :key="t.key"
-                  class="theme-opt"
-                  :class="{ active: theme === t.key }"
-                  @click="setTheme(t.key); showThemePicker = false"
-                >
-                  <span class="theme-dot">{{ t.icon }}</span>
-                  <span class="theme-label">{{ t.label }}</span>
-                  <span v-if="theme === t.key" class="tick">✓</span>
-                </button>
+                <template v-for="g in themeGroups" :key="g.key">
+                  <div class="theme-group-title">{{ g.label }}</div>
+                  <button
+                    v-for="t in g.options"
+                    :key="t.key"
+                    class="theme-opt"
+                    :class="{ active: theme === t.key }"
+                    @click="setTheme(t.key); showThemePicker = false"
+                  >
+                    <span class="theme-swatch" :style="{ background: t.swatch }"></span>
+                    <span class="theme-dot">{{ t.icon }}</span>
+                    <span class="theme-label">{{ t.label }}</span>
+                    <span v-if="theme === t.key" class="tick">✓</span>
+                  </button>
+                </template>
               </div>
             </div>
             <div class="avatar-sm">
@@ -608,17 +631,21 @@ function applyBackground(s?: any) {
                 <span class="theme-dot">{{ THEMES[theme]?.icon }}</span>
               </button>
               <div v-if="showThemePicker" class="theme-picker glass">
-                <button
-                  v-for="t in themeOptions"
-                  :key="t.key"
-                  class="theme-opt"
-                  :class="{ active: theme === t.key }"
-                  @click="setTheme(t.key); showThemePicker = false"
-                >
-                  <span class="theme-dot">{{ t.icon }}</span>
-                  <span class="theme-label">{{ t.label }}</span>
-                  <span v-if="theme === t.key" class="tick">✓</span>
-                </button>
+                <template v-for="g in themeGroups" :key="g.key">
+                  <div class="theme-group-title">{{ g.label }}</div>
+                  <button
+                    v-for="t in g.options"
+                    :key="t.key"
+                    class="theme-opt"
+                    :class="{ active: theme === t.key }"
+                    @click="setTheme(t.key); showThemePicker = false"
+                  >
+                    <span class="theme-swatch" :style="{ background: t.swatch }"></span>
+                    <span class="theme-dot">{{ t.icon }}</span>
+                    <span class="theme-label">{{ t.label }}</span>
+                    <span v-if="theme === t.key" class="tick">✓</span>
+                  </button>
+                </template>
               </div>
             </div>
             <span class="user-name">{{ auth.user?.displayName || auth.user?.username || '未登录' }}</span>
@@ -667,6 +694,10 @@ function applyBackground(s?: any) {
         </main>
       </div>
     </div>
+    <!-- 全局传输中心（上传/下载任务面板，右下角悬浮） -->
+    <TransferCenter />
+    <!-- 全局命令面板（Ctrl/⌘+K 唤起） -->
+    <CommandPalette />
   </div>
 </template>
 
@@ -1079,15 +1110,37 @@ function applyBackground(s?: any) {
   position: absolute;
   top: 48px;
   right: 0;
-  width: 180px;
+  width: 200px;
+  max-height: min(460px, calc(100vh - 120px));
+  overflow-y: auto;
   border-radius: 16px;
   padding: 8px;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   /* 浮层使用实心背景，避免半透明玻璃底透出下方内容影响可读性 */
   background: var(--glass-bg-solid, var(--glass-bg));
+}
+/* 分组标题：小号大写标签 */
+.theme-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 8px 12px 4px;
+}
+.theme-group-title:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+/* 主题底色 swatch 圆点预览 */
+.theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4), 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
 }
 .theme-opt {
   display: flex;

@@ -38,4 +38,11 @@ export const tagService = {
     const rows = db.prepare('SELECT DISTINCT tag FROM file_tags ORDER BY tag').all() as any[];
     return rows.map((r) => r.tag);
   },
+
+  /** 标签 → 文件数统计（标签页展示用） */
+  tagCounts(): Record<string, number> {
+    const db = getDb();
+    const rows = db.prepare('SELECT tag, COUNT(*) AS c FROM file_tags GROUP BY tag').all() as any[];
+    return Object.fromEntries(rows.map((r) => [r.tag, r.c]));
+  },
 };

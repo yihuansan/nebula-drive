@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { api } from '../api';
+import { api, loadThumbs } from '../api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ZoomOut, ZoomIn, Refresh, RefreshLeft, RefreshRight, FullScreen, Loading, Delete } from '@element-plus/icons-vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const router = useRouter();
 const loading = ref(false);
@@ -11,7 +12,16 @@ const hasLoaded = ref(false); // 是否已完成过首次加载
 const entries = ref<any[]>([]);
 const storageId = ref<number | null>(null);
 const storages = ref<any[]>([]);
-const filterType = ref<'all' | 'files' | 'folders'>('all');
+const filterType = ref<'all' | 'docs' | 'image' | 'video' | 'other'>('all');
+
+/** 条目类型归类（与筛选条一致） */
+function typeOf(row: any): 'docs' | 'image' | 'video' | 'other' {
+  const label = getFileType(row).label;
+  if (label === '图片') return 'image';
+  if (label === '视频') return 'video';
+  if (label === '文档' || label === 'PDF') return 'docs';
+  return 'other';
+}
 
 onMounted(async () => {
   try {
@@ -31,6 +41,7 @@ async function load() {
   try {
     const r = await api(`/files/recent?storageId=${storageId.value}&limit=100`);
     entries.value = r.entries;
+    startThumbs();
   } catch (e: any) {
     ElMessage.error(e.message || '加载最近文件失败');
   } finally {
@@ -39,18 +50,64 @@ async function load() {
   }
 }
 
+/* 图片文件缩略图（带鉴权拉取，失败回退图标） */
+const thumbs = ref<Record<string, string>>({});
+let abortThumbs: (() => void) | null = null;
+function startThumbs() {
+  abortThumbs?.();
+  thumbs.value = {};
+  const sid = storageId.value;
+  if (!sid) return;
+  abortThumbs = loadThumbs(
+    entries.value.filter((e) => !e.isDir).map((e) => ({ storageId: sid, path: e.path })),
+    (path, url) => {
+      if (storageId.value === sid) thumbs.value[path] = url;
+    },
+    160
+  );
+}
+onUnmounted(() => abortThumbs?.());
+
 /** 过滤后的条目 */
 const filteredEntries = computed(() => {
   if (filterType.value === 'all') return entries.value;
-  if (filterType.value === 'folders') return entries.value.filter(e => e.isDir);
-  return entries.value.filter(e => !e.isDir);
+  return entries.value.filter((e) => typeOf(e) === filterType.value);
 });
 
-/** 统计信息 */
-const stats = computed(() => {
-  const files = entries.value.filter(e => !e.isDir);
-  const folders = entries.value.filter(e => e.isDir);
-  return { total: entries.value.length, files: files.length, folders: folders.length };
+/** 类型筛选条（带计数） */
+const typeFilters = computed(() => [
+  { key: 'all', label: '全部', count: entries.value.length },
+  { key: 'docs', label: '文档', count: entries.value.filter((e) => typeOf(e) === 'docs').length },
+  { key: 'image', label: '图片', count: entries.value.filter((e) => typeOf(e) === 'image').length },
+  { key: 'video', label: '视频', count: entries.value.filter((e) => typeOf(e) === 'video').length },
+  { key: 'other', label: '其他', count: entries.value.filter((e) => typeOf(e) === 'other').length },
+]);
+
+/** 访问时间解析（SQLite UTC "YYYY-MM-DD HH:MM:SS"） */
+function parseAccessTime(ts: string): Date | null {
+  if (!ts) return null;
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** 按访问日期分组：今天 / 昨天 / 更早 */
+const groupedSections = computed(() => {
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const today: any[] = [];
+  const yesterday: any[] = [];
+  const earlier: any[] = [];
+  for (const e of filteredEntries.value) {
+    const t = parseAccessTime(e.accessed_at)?.getTime() ?? 0;
+    if (t >= startToday) today.push(e);
+    else if (t >= startToday - 86400000) yesterday.push(e);
+    else earlier.push(e);
+  }
+  return [
+    { title: '今天', items: today },
+    { title: '昨天', items: yesterday },
+    { title: '更早', items: earlier },
+  ].filter((s) => s.items.length);
 });
 
 /** 获取文件类型图标和颜色 */
@@ -85,7 +142,7 @@ const imgInfo = ref<{ width: number; height: number } | null>(null);
 const isFullscreen = ref(false);
 
 /** 点击文件：打开预览弹窗（图片/视频/音频/PDF）或下载（其他） */
-function openFile(row: any) {
+async function openFile(row: any) {
   const isImage = /\.(jpg|jpeg|png|gif|webp|bmp|svg|ico)$/i.test(row.name);
   const isVideo = /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(row.name);
   const isAudio = /\.(mp3|wav|flac|ogg|aac|m4a)$/i.test(row.name);
@@ -94,10 +151,15 @@ function openFile(row: any) {
   if (isImage || isVideo || isAudio || isPdf) {
     openPreview(row);
   } else {
-    const token = localStorage.getItem('nebula_token') || '';
-    const base = `/api/v1/files/download?storageId=${storageId.value}&path=${encodeURIComponent(row.path)}`;
-    const url = `${base}&token=${encodeURIComponent(token)}`;
-    window.open(url, '_blank');
+    // 不把 JWT 拼进 URL（会泄漏到浏览器历史），改用一次性下载票据（与 Files/Favorites 一致）
+    try {
+      const r = await api('/files/download-ticket', { method: 'POST', body: JSON.stringify({ storageId: storageId.value, path: row.path }) });
+      const a = document.createElement('a');
+      a.href = `/api/v1/files/download?ticket=${r.ticket}`;
+      a.click();
+    } catch (e: any) {
+      ElMessage.error(e.message || '下载失败');
+    }
   }
 }
 
@@ -207,18 +269,16 @@ async function clearAll() {
           <el-icon :size="24" class="header-icon"><Clock /></el-icon>
           最近全部
         </h2>
-        <div class="stats-badges">
-          <span class="stat-badge" :class="{ active: filterType === 'all' }" @click="filterType = 'all'">
-            <el-icon :size="14"><Files /></el-icon>
-            全部 {{ stats.total }}
-          </span>
-          <span class="stat-badge" :class="{ active: filterType === 'files' }" @click="filterType = 'files'">
-            <el-icon :size="14"><Document /></el-icon>
-            文件 {{ stats.files }}
-          </span>
-          <span class="stat-badge" :class="{ active: filterType === 'folders' }" @click="filterType = 'folders'">
-            <el-icon :size="14"><Folder /></el-icon>
-            文件夹 {{ stats.folders }}
+        <div class="stats-badges filter-chips">
+          <span
+            v-for="f in typeFilters"
+            :key="f.key"
+            class="chip"
+            :class="{ active: filterType === f.key }"
+            @click="filterType = f.key as any"
+          >
+            {{ f.label }}
+            <span class="chip-count">{{ f.count }}</span>
           </span>
         </div>
       </div>
@@ -244,48 +304,55 @@ async function clearAll() {
       <span>加载中…</span>
     </div>
 
-    <!-- 文件网格 -->
-    <div class="recent-grid" v-else v-loading="loading">
-      <div 
-        v-for="row in filteredEntries" 
-        :key="row.path" 
-        class="recent-card glass-card"
-        @click="row.isDir ? openFolder(row) : openFile(row)"
-      >
-        <div class="card-icon" :style="{ background: getFileType(row).color + '15' }">
-          <el-icon :size="28" :color="getFileType(row).color">
-            <Folder v-if="row.isDir" />
-            <Picture v-else-if="getFileType(row).label === '图片'" />
-            <VideoCamera v-else-if="getFileType(row).label === '视频'" />
-            <Headset v-else-if="getFileType(row).label === '音频'" />
-            <Files v-else-if="getFileType(row).label === '压缩包'" />
-            <Document v-else />
-          </el-icon>
-        </div>
-        <div class="card-body">
-          <div class="card-name" :title="row.name">{{ row.name }}</div>
-          <div class="card-meta">
-            <span class="meta-type" :style="{ color: getFileType(row).color }">{{ getFileType(row).label }}</span>
-            <span v-if="!row.isDir" class="meta-size">{{ fmtSize(row.size) }}</span>
-            <span class="meta-time" :title="'最近访问：' + fmtAccessTime(row.accessed_at)">
-              <el-icon :size="11"><Clock /></el-icon>
-              {{ fmtAccessTime(row.accessed_at) }}
-            </span>
+    <!-- 文件网格（按访问日期分组） -->
+    <div v-else v-loading="loading" class="recent-sections">
+      <template v-for="sec in groupedSections" :key="sec.title">
+        <div class="section-title">{{ sec.title }} · {{ sec.items.length }}</div>
+        <div class="recent-grid page-enter-stagger">
+          <div
+            v-for="(row, i) in sec.items"
+            :key="row.path"
+            class="recent-card glass-card hover-lift"
+            :style="{ '--i': i }"
+            @click="row.isDir ? openFolder(row) : openFile(row)"
+          >
+            <img v-if="thumbs[row.path]" :src="thumbs[row.path]" class="recent-thumb" :alt="row.name" loading="lazy" />
+            <div v-else class="card-icon" :style="{ background: getFileType(row).color + '15' }">
+              <el-icon :size="28" :color="getFileType(row).color">
+                <Folder v-if="row.isDir" />
+                <Picture v-else-if="getFileType(row).label === '图片'" />
+                <VideoCamera v-else-if="getFileType(row).label === '视频'" />
+                <Headset v-else-if="getFileType(row).label === '音频'" />
+                <Files v-else-if="getFileType(row).label === '压缩包'" />
+                <Document v-else />
+              </el-icon>
+            </div>
+            <div class="card-body">
+              <div class="card-name" :title="row.name">{{ row.name }}</div>
+              <div class="card-meta">
+                <span class="meta-type" :style="{ color: getFileType(row).color }">{{ getFileType(row).label }}</span>
+                <span v-if="!row.isDir" class="meta-size">{{ fmtSize(row.size) }}</span>
+                <span class="meta-time" :title="'最近访问：' + fmtAccessTime(row.accessed_at)">
+                  <el-icon :size="11"><Clock /></el-icon>
+                  {{ fmtAccessTime(row.accessed_at) }}
+                </span>
+              </div>
+            </div>
+            <div class="card-action">
+              <el-icon :size="16" class="action-icon">
+                <ArrowRight />
+              </el-icon>
+            </div>
           </div>
         </div>
-        <div class="card-action">
-          <el-icon :size="16" class="action-icon">
-            <ArrowRight />
-          </el-icon>
-        </div>
-      </div>
-      
+      </template>
+
       <!-- 空状态 -->
-      <div v-if="!loading && !filteredEntries.length" class="empty-state">
-        <el-icon :size="64" class="empty-icon"><Clock /></el-icon>
-        <h3>暂无最近访问记录</h3>
-        <p>浏览文件后，这里会显示最近访问的文件和文件夹</p>
-      </div>
+      <EmptyState
+        v-if="!loading && !filteredEntries.length"
+        title="暂无最近访问记录"
+        description="浏览文件后，这里会显示最近访问的文件和文件夹"
+      />
     </div>
 
     <!-- 预览弹窗（图片/视频/音频/PDF） -->
@@ -484,6 +551,14 @@ async function clearAll() {
   display: grid;
   place-items: center;
   flex-shrink: 0;
+}
+.recent-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--glass-border);
 }
 
 /* 内容区域 */

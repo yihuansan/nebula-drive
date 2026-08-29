@@ -2,6 +2,8 @@
 import { ref, onMounted } from 'vue';
 import { api } from '../api';
 import { ElMessage } from 'element-plus';
+import PageHeader from '../components/PageHeader.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 const loading = ref(false);
 const entries = ref<any[]>([]);
@@ -95,12 +97,18 @@ function fmtSize(bytes: number) {
 
 <template>
   <div class="hidden-page">
-    <div class="page-header glass">
-      <h2>隐藏空间</h2>
-      <el-select v-if="state === 'unlocked'" v-model="storageId" size="small" @change="load" style="width: 180px">
-        <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
-      </el-select>
-    </div>
+    <PageHeader
+      icon="Lock"
+      title="隐藏空间"
+      :subtitle="state === 'unlocked' ? '已解锁 · 仅你可见的私密区域' : '密码保护的私密区域，仅你可见'"
+    >
+      <template #actions>
+        <el-select v-if="state === 'unlocked'" v-model="storageId" size="small" @change="load" style="width: 180px">
+          <el-option v-for="s in storages" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+        <span v-if="state === 'unlocked'" class="status-badge ok"><i class="dot pulse" />已解锁</span>
+      </template>
+    </PageHeader>
 
     <!-- 设置密码 -->
     <div v-if="state === 'set-password'" class="setup-panel">
@@ -172,8 +180,8 @@ function fmtSize(bytes: number) {
     </div>
 
     <!-- 文件列表 -->
-    <div v-else class="hidden-grid" v-loading="loading">
-      <div v-for="row in entries" :key="row.path" class="hidden-item glass-card">
+    <div v-else class="hidden-grid page-enter-stagger" v-loading="loading">
+      <div v-for="(row, i) in entries" :key="row.path" class="hidden-item glass-card hover-lift" :style="{ '--i': i }">
         <el-icon :size="36" :color="row.isDir ? '#409eff' : '#909399'">
           <Folder v-if="row.isDir" />
           <Document v-else />
@@ -181,11 +189,11 @@ function fmtSize(bytes: number) {
         <div class="hidden-name">{{ row.name }}</div>
         <div class="hidden-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
       </div>
-      <div v-if="!loading && !entries.length" class="empty">
-        <el-icon :size="48" color="#94a3b8"><FolderOpened /></el-icon>
-        <p>隐藏空间为空</p>
-        <p class="tip">将文件移动到 /hidden 目录即可</p>
-      </div>
+      <EmptyState
+        v-if="!loading && !entries.length"
+        title="隐藏空间为空"
+        description="将文件移动到 /hidden 目录即可"
+      />
     </div>
   </div>
 </template>

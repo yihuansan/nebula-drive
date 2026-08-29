@@ -70,6 +70,16 @@ export function revokeOtherSessions(userId: number, currentTokenHash: string, to
   return Number(result.changes);
 }
 
+/** 撤销当前会话（登出）：当前 token 加入撤销列表并删除会话记录 */
+export function revokeCurrentSession(userId: number, tokenHash: string): void {
+  const db = getDb();
+  // 覆盖最长有效期（默认 JWT TTL=7天），避免撤销记录先过期导致 token 复活
+  const expiresAt = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
+  db.prepare('INSERT OR IGNORE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+    .run(tokenHash, userId, expiresAt);
+  db.prepare('DELETE FROM user_sessions WHERE user_id = ? AND token_hash = ?').run(userId, tokenHash);
+}
+
 /** 撤销用户的全部会话（admin 强制下线）：所有 token 加入撤销列表并删除会话记录 */
 export function revokeAllSessions(userId: number, tokenExpiryHours: number): number {
   const db = getDb();

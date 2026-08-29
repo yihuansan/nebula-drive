@@ -70,3 +70,69 @@ export function fmtTime(t: string | number | null): string {
   if (isNaN(d.getTime())) return String(t);
   return d.toLocaleString('zh-CN', { hour12: false });
 }
+
+/* ---------- 缩略图（带 Authorization 拉取 → blob URL，内存缓存） ---------- */
+const thumbCache = new Map<string, string | null>();
+const THUMB_CACHE_MAX = 300;
+
+/** 获取图片缩略图的 blob URL；失败返回 null（调用方回退图标）。仅本地存储支持。 */
+export async function thumbnailUrl(storageId: number, path: string, size = 320): Promise<string | null> {
+  const key = `${storageId}:${path}:${size}`;
+  if (thumbCache.has(key)) return thumbCache.get(key)!;
+  const token = localStorage.getItem('nebula_token') || '';
+  try {
+    const res = await fetch(
+      `${BASE}/files/thumbnail?storageId=${storageId}&path=${encodeURIComponent(path)}&size=${size}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) throw new Error('thumb failed');
+    const url = URL.createObjectURL(await res.blob());
+    if (thumbCache.size >= THUMB_CACHE_MAX) {
+      const first = thumbCache.keys().next().value;
+      if (first !== undefined) {
+        const old = thumbCache.get(first);
+        if (old) URL.revokeObjectURL(old);
+        thumbCache.delete(first);
+      }
+    }
+    thumbCache.set(key, url);
+    return url;
+  } catch {
+    thumbCache.set(key, null);
+    return null;
+  }
+}
+
+/* ---------- 批量缩略图助手（各列表页共用） ---------- */
+const THUMB_IMG_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'jfif']);
+
+/**
+ * 批量加载缩略图：仅图片扩展名、每批 10 个并发，成功一张即回调一张（增量刷新）。
+ * 返回 abort 函数：切换存储/卸载时调用，中止后续批次。
+ */
+export function loadThumbs(
+  items: { storageId: number; path: string }[],
+  onThumb: (path: string, url: string) => void,
+  size = 320,
+  limit = 120
+): () => void {
+  let aborted = false;
+  const targets = items
+    .filter((it) => THUMB_IMG_EXTS.has((it.path.split('.').pop() || '').toLowerCase()))
+    .slice(0, limit);
+  (async () => {
+    for (let i = 0; i < targets.length; i += 10) {
+      if (aborted) return;
+      const batch = targets.slice(i, i + 10);
+      const urls = await Promise.all(batch.map((it) => thumbnailUrl(it.storageId, it.path, size)));
+      if (aborted) return;
+      batch.forEach((it, j) => {
+        const u = urls[j];
+        if (u) onThumb(it.path, u);
+      });
+    }
+  })();
+  return () => {
+    aborted = true;
+  };
+}

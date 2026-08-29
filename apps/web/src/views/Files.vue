@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { api, fmtSize, fmtTime } from '../api';
+import { api, fmtSize, fmtTime, thumbnailUrl } from '../api';
 import ImageEditor from '../components/ImageEditor.vue';
+import EmptyState from '../components/EmptyState.vue';
+import FileDetailDrawer from '../components/FileDetailDrawer.vue';
 import { useTheme, THEMES, type ThemeKey } from '../useTheme';
 import { useAuthStore } from '../stores/auth';
+import { useTransferStore } from '../stores/transfer';
+
+const transfer = useTransferStore();
 
 const storages = ref<any[]>([]);
 const usageTotal = ref(0); // 真实配额用量（所有存储 used 之和），挂载时异步加载
@@ -202,112 +207,7 @@ const statCards = computed(() => {
   ];
 });
 
-/* ---------- ⌘K 命令面板（仅 command 主题激活） ---------- */
-const cmdkOpen = ref(false);
-const cmdkQuery = ref('');
-const cmdkActiveIndex = ref(0);
-const cmdkInputRef = ref<HTMLInputElement | null>(null);
-
-/** 模糊打分：子串 > 子序列；不匹配返回 -1 */
-function cmdkScore(name: string, q: string): number {
-  const n = name.toLowerCase();
-  const s = q.trim().toLowerCase();
-  if (!s) return 100;
-  const idx = n.indexOf(s);
-  if (idx >= 0) return 10000 - idx; // 子串命中：位置越靠前分越高
-  let i = 0;
-  let score = 0;
-  let gap = 0;
-  for (let j = 0; j < n.length && i < s.length; j++) {
-    if (n[j] === s[i]) {
-      i++;
-      score += Math.max(0, 50 - gap);
-      gap = 0;
-    } else {
-      gap++;
-    }
-  }
-  if (i < s.length) return -1; // 非子序列
-  return score;
-}
-
-const cmdkResults = computed(() => {
-  const q = cmdkQuery.value.trim().toLowerCase();
-  return entries.value
-    .map((entry, index) => ({ entry, index, score: cmdkScore(entry.name, q) }))
-    .filter(r => r.score >= 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .slice(0, 20)
-    .map(r => r.entry);
-});
-
-watch(cmdkQuery, () => {
-  cmdkActiveIndex.value = 0;
-});
-
-function openCmdk() {
-  cmdkOpen.value = true;
-  cmdkQuery.value = '';
-  cmdkActiveIndex.value = 0;
-  nextTick(() => cmdkInputRef.value?.focus());
-}
-function closeCmdk() {
-  cmdkOpen.value = false;
-  cmdkQuery.value = '';
-  cmdkActiveIndex.value = 0;
-}
-// 离开 command 主题时自动关闭面板，避免状态残留
-watch(layoutType, (t) => {
-  if (t !== 'command') closeCmdk();
-});
-function executeCmdk() {
-  const entry = cmdkResults.value[cmdkActiveIndex.value];
-  if (!entry) return;
-  closeCmdk();
-  if (entry.isDir) {
-    path.value = entry.path;
-    load();
-  } else {
-    openPreview(entry);
-  }
-}
-function selectCmdk(i: number) {
-  cmdkActiveIndex.value = i;
-  executeCmdk();
-}
-/** 面板打开时的键盘导航：↑/↓ 移动、Enter 执行、Esc 关闭 */
-function onCmdkKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    closeCmdk();
-    e.preventDefault();
-  } else if (e.key === 'ArrowDown') {
-    const len = cmdkResults.value.length;
-    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value + 1) % len : 0;
-    e.preventDefault();
-  } else if (e.key === 'ArrowUp') {
-    const len = cmdkResults.value.length;
-    cmdkActiveIndex.value = len ? (cmdkActiveIndex.value - 1 + len) % len : 0;
-    e.preventDefault();
-  } else if (e.key === 'Enter') {
-    executeCmdk();
-    e.preventDefault();
-  }
-}
-/** 全局快捷键：Meta+K / Control+K（仅 command 主题响应） */
-function onGlobalKeydown(e: KeyboardEvent) {
-  if (layoutType.value !== 'command') return;
-  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-    e.preventDefault();
-    if (cmdkOpen.value) closeCmdk();
-    else openCmdk();
-  }
-}
-onMounted(() => {
-  window.addEventListener('keydown', onGlobalKeydown);
-});
-onUnmounted(() => {
-  window.removeEventListener('keydown', onGlobalKeydown);
-});
+/* ⌘K 命令面板已升级为全局 CommandPalette（App.vue 挂载，Ctrl/⌘+K 全主题可用） */
 
 /** 便当盒布局：featured 2×2（首卡）+ medium 2×1（第 2/3 卡）+ 彩色 tile（每屏 2-3 张） */
 function bentoCardClass(index: number): string {
@@ -456,6 +356,7 @@ function ctxAction(cmd: string) {
     case 'move': openMove(row, 'move'); break;
     case 'copy': openMove(row, 'copy'); break;
     case 'props': openProps(row); break;
+    case 'detail': openDetail(row); break;
     case 'delete': doDelete(row); break;
   }
 }
@@ -514,6 +415,73 @@ function clearSelection() {
   multiSelectMode.value = false;
 }
 
+/** 全选 / 反选（浮动操作条 + Ctrl/⌘+A 快捷键） */
+function selectAll() {
+  multiSelectMode.value = true;
+  selected.value = [...entries.value];
+}
+function invertSelection() {
+  const sel = new Set(selected.value.map((x: any) => x.path));
+  selected.value = entries.value.filter((e: any) => !sel.has(e.path));
+}
+
+/** 批量收藏（浮动操作条）：仅对未收藏项执行，完成后清空选择 */
+async function doBatchStar() {
+  const targets = selected.value.filter((row: any) => !isStarred(row));
+  if (!targets.length) return ElMessage.info('选中项均已收藏');
+  let okCount = 0;
+  for (const row of targets) {
+    try {
+      await api('/favorites', { method: 'POST', body: JSON.stringify({ storageId: storageId.value, path: row.path }) });
+      starredSet.value.add(starKey(row));
+      okCount++;
+    } catch { /* 单项失败跳过 */ }
+  }
+  ElMessage.success(`已收藏 ${okCount} 项`);
+  clearSelection();
+}
+
+/* ---------- 键盘快捷键（Ctrl+A 全选 / Delete 批量删除 / F2 重命名 / Esc 退出多选） ---------- */
+const shortcutDialog = ref(false);
+const SHORTCUTS = [
+  { keys: 'Ctrl / ⌘ + K', desc: '打开全局命令面板' },
+  { keys: 'Ctrl / ⌘ + A', desc: '全选当前目录文件' },
+  { keys: 'Delete', desc: '删除选中文件（带确认）' },
+  { keys: 'F2', desc: '重命名单选文件' },
+  { keys: 'Esc', desc: '关闭右键菜单 / 退出多选模式' },
+];
+/** Element Plus 对话框/消息框打开时 DOM 中存在 overlay */
+function anyDialogOpen() {
+  return !!document.querySelector('.el-overlay');
+}
+function onFilesKeydown(e: KeyboardEvent) {
+  if (route.path !== '/') return; // keep-alive 常驻：仅文件页激活时响应
+  const t = e.target as HTMLElement;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+    if (anyDialogOpen()) return;
+    e.preventDefault();
+    selectAll();
+  } else if (e.key === 'Delete') {
+    if (anyDialogOpen() || !selected.value.length) return;
+    e.preventDefault();
+    doBatchDelete();
+  } else if (e.key === 'F2') {
+    if (anyDialogOpen() || selected.value.length !== 1) return;
+    e.preventDefault();
+    openRename(selected.value[0]);
+  } else if (e.key === 'Escape') {
+    if (contextMenu.value.visible) {
+      closeContextMenu();
+      return;
+    }
+    if (anyDialogOpen()) return;
+    if (multiSelectMode.value) clearSelection();
+  }
+}
+onMounted(() => window.addEventListener('keydown', onFilesKeydown));
+onUnmounted(() => window.removeEventListener('keydown', onFilesKeydown));
+
 /** 卡片点击：多选模式下选中，否则正常打开 */
 function onCardClick(row: any) {
   if (multiSelectMode.value) {
@@ -542,6 +510,21 @@ function fileType(name: string, isDir: boolean) {
   return { icon: 'Document', color: '#94a3b8' };
 }
 
+/* 文件类型小徽章（图片/视频/文档/压缩包彩色标签） */
+function fileTag(row: any): { text: string; color: string } | null {
+  if (row.isDir) return null;
+  const ext = row.name.split('.').pop()?.toLowerCase() || '';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext)) return { text: '图片', color: '#ec4899' };
+  if (['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv'].includes(ext)) return { text: '视频', color: '#ef4444' };
+  if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md'].includes(ext)) return { text: '文档', color: '#2563eb' };
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2'].includes(ext)) return { text: '压缩包', color: '#ca8a04' };
+  return null;
+}
+function fileTagStyle(row: any) {
+  const tag = fileTag(row);
+  return tag ? { color: tag.color, background: `color-mix(in srgb, ${tag.color} 14%, transparent)` } : {};
+}
+
 /* ---------- 排序（服务端支持 name/size/mtime × asc/desc） ---------- */
 const sortKey = ref<'name' | 'size' | 'mtime'>('name');
 const sortOrder = ref<'asc' | 'desc'>('asc');
@@ -568,6 +551,7 @@ function handleToolbarMore(cmd: string) {
     case 'sort-mtime': sortKey.value = 'mtime'; load(); break;
     case 'tag-filter': tagFilterDialog.value = true; break;
     case 'transcode-tasks': openTranscodeTasks(); break;
+    case 'shortcuts': shortcutDialog.value = true; break;
     case 'multi-select':
       multiSelectMode.value = !multiSelectMode.value;
       if (!multiSelectMode.value) selected.value = [];
@@ -630,6 +614,7 @@ async function load() {
     );
     entries.value = r.entries;
     saveFilesCache();
+    void ensureThumbs();
   } catch (e: any) {
     ElMessage.error(e.message || '加载目录失败');
   } finally {
@@ -732,6 +717,7 @@ function handleMoreCmd(cmd: string, row: any) {
     case 'share': openShare(row); break;
     case 'rename': openRename(row); break;
     case 'props': openProps(row); break;
+    case 'detail': openDetail(row); break;
     case 'archive': openArchivePreview(row); break;
     case 'decompress': doDecompress(row); break;
     case 'move': openMove(row, 'move'); break;
@@ -890,6 +876,7 @@ async function doMove() {
     }
     ElMessage.success(moveMode.value === 'move' ? '移动成功' : '复制成功');
     moveDialog.value = false;
+    if (moveBatch.value) clearSelection();
     load();
   } catch (e: any) {
     ElMessage.error(e.message || '操作失败');
@@ -925,6 +912,7 @@ async function doBatchDelete() {
       body: JSON.stringify({ storageId: storageId.value, paths: selected.value.map((x: any) => x.path) }),
     });
     ElMessage.success('批量删除完成');
+    clearSelection();
     load();
   } catch (e: any) {
     ElMessage.error(e.message || '批量删除失败');
@@ -940,6 +928,7 @@ async function download(row: any) {
     const a = document.createElement('a');
     a.href = `/api/v1/files/download?ticket=${r.ticket}`;
     a.click();
+    transfer.addDownload(row.name, row.size || 0);
   } catch (e: any) {
     ElMessage.error(e.message || '下载失败');
   }
@@ -1181,7 +1170,16 @@ async function openInNewTab() {
     const url = URL.createObjectURL(blob);
     const win = window.open('', '_blank');
     if (win) {
-      win.document.write(`<html><head><title>${encodeURIComponent(previewName.value)}</title><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#1a1a1a}img{max-width:100%;max-height:100vh;object-fit:contain;user-select:none}</style></head><body><img src="${url}" alt="${encodeURIComponent(previewName.value)}"/></body></html>`);
+      // 用 DOM API 构建（替代 document.write，避免字符串拼接的 HTML 注入面）
+      const doc = win.document;
+      doc.title = previewName.value;
+      const style = doc.createElement('style');
+      style.textContent = 'body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#1a1a1a}img{max-width:100%;max-height:100vh;object-fit:contain;user-select:none}';
+      doc.head.appendChild(style);
+      const img = doc.createElement('img');
+      img.src = url;
+      img.alt = previewName.value;
+      doc.body.appendChild(img);
     }
   } catch (e: any) {
     ElMessage.error(e.message || '打开新窗口失败');
@@ -1205,6 +1203,8 @@ interface UploadItem {
   uploadId?: string;
   chunkSize?: number;
   doneChunks?: number[];
+  /** 全局传输中心任务 id */
+  tid?: string;
 }
 const uploads = ref<UploadItem[]>([]);
 const UPLOAD_QUEUE_KEY = 'nd-upload-queue';
@@ -1257,6 +1257,7 @@ function startUploads(files: File[]) {
     const dup = uploads.value.find((u) => u.name === f.name && u.size === f.size && u.status === 'uploading');
     if (dup) continue;
     const u: UploadItem = { name: f.name, size: f.size, percent: 0, status: 'uploading', file: f };
+    u.tid = transfer.startUpload(f.name, f.size);
     uploads.value.push(u);
     added = true;
   }
@@ -1273,9 +1274,11 @@ async function uploadOne(u: UploadItem) {
     else await chunkUpload(u);
     u.status = 'done';
     u.percent = 100;
+    if (u.tid) transfer.finish(u.tid);
   } catch (err: any) {
     u.status = 'error';
     u.error = err?.message || '未知错误';
+    if (u.tid) transfer.fail(u.tid, u.error);
   }
 }
 
@@ -1283,12 +1286,14 @@ function retryUpload(u: UploadItem) {
   if (u.status !== 'error' || !u.file) return;
   u.status = 'uploading';
   u.error = undefined;
+  if (u.tid) transfer.update(u.tid, u.percent);
   pumpQueue();
 }
 
 function cancelUpload(u: UploadItem) {
   const idx = uploads.value.indexOf(u);
   if (idx >= 0) uploads.value.splice(idx, 1);
+  if (u.tid) transfer.remove(u.tid);
   saveQueue();
   if (u.uploadId) {
     void api(`/upload/${u.uploadId}`, { method: 'DELETE' }).catch(() => { /* 忽略 */ });
@@ -1345,6 +1350,7 @@ function onResumePick(e: Event) {
     if (target) {
       target.file = f;
       target.status = 'uploading';
+      target.tid = target.tid || transfer.startUpload(target.name, target.size);
     }
   }
   resumeTarget = null;
@@ -1471,6 +1477,7 @@ async function chunkUpload(u: UploadItem) {
     done.add(i);
     sent++;
     u.percent = Math.round((sent / total) * 100);
+    if (u.tid) transfer.update(u.tid, u.percent);
   }
   await api('/upload/complete', { method: 'POST', body: JSON.stringify({ uploadId: u.uploadId }) });
   u.percent = 100;
@@ -1607,7 +1614,9 @@ async function doBatchDownload() {
     a.download = 'batch-download.zip';
     a.click();
     URL.revokeObjectURL(a.href);
+    transfer.addDownload(`打包下载（${selected.value.length} 个文件）`);
     ElMessage.success('批量下载完成');
+    clearSelection();
   } catch (e: any) {
     ElMessage.error(e.message || '批量下载失败');
   } finally {
@@ -1633,6 +1642,41 @@ async function openProps(row: any) {
     ElMessage.error(e.message || '获取属性失败');
   } finally {
     propsLoading.value = false;
+  }
+}
+
+/* ---------- 文件详情抽屉（概览 / 版本 / 评论 / 标签） ---------- */
+const detailDrawer = ref(false);
+const detailTarget = ref<any>(null);
+function openDetail(row: any) {
+  detailTarget.value = row;
+  detailDrawer.value = true;
+}
+function detailIsImage(row: any) {
+  return !!row && !row.isDir && isImage(row.name);
+}
+
+/* ---------- 图片缩略图（网格/列表懒加载，带鉴权拉取 + 缓存） ---------- */
+const thumbMap = ref<Record<string, string>>({});
+async function ensureThumbs() {
+  const sid = storageId.value;
+  const imgs = entries.value.filter((e: any) => !e.isDir && isImage(e.name)).slice(0, 120);
+  if (!imgs.length) return;
+  const BATCH = 10;
+  for (let i = 0; i < imgs.length; i += BATCH) {
+    // 存储已切换则中止，避免旧缩略图写入新目录视图
+    if (storageId.value !== sid) return;
+    const chunk = imgs.slice(i, i + BATCH);
+    const urls = await Promise.all(
+      chunk.map((e: any) =>
+        thumbMap.value[e.path] ? Promise.resolve(thumbMap.value[e.path]) : thumbnailUrl(sid, e.path, 320)
+      )
+    );
+    const next = { ...thumbMap.value };
+    chunk.forEach((e: any, idx: number) => {
+      if (urls[idx]) next[e.path] = urls[idx] as string;
+    });
+    thumbMap.value = next;
   }
 }
 
@@ -1680,18 +1724,65 @@ function isPdf(name: string) {
 /* ---------- 搜索 ---------- */
 const searchDialog = ref(false);
 const searchQ = ref('');
+
+/* 搜索历史：打开对话框时拉取，点击 chip 直接以该词搜索 */
+const searchHistory = ref<string[]>([]);
+async function loadSearchHistory() {
+  try {
+    const r = await api('/search-history?limit=8');
+    searchHistory.value = [...new Set((r.history || []).map((h: any) => h.query).filter(Boolean))].slice(0, 8);
+  } catch { /* 忽略 */ }
+}
+async function clearSearchHistory() {
+  try {
+    await api('/search-history', { method: 'DELETE' });
+    searchHistory.value = [];
+    ElMessage.success('已清空搜索历史');
+  } catch (e: any) {
+    ElMessage.error(e.message || '清空失败');
+  }
+}
+function useHistoryQuery(qWord: string) {
+  searchQ.value = qWord;
+  doSearch();
+}
+watch(searchDialog, (v) => {
+  if (v) loadSearchHistory();
+});
 const searchResults = ref<any[]>([]);
 const searching = ref(false);
 const searchFilters = ref({ type: '', minSize: '', maxSize: '', since: '', until: '' });
+/* 类型/大小预设（后端 /search 支持逗号分隔的扩展名列表与 min/max 字节） */
+const SEARCH_TYPE_OPTIONS = [
+  { label: '图片', value: 'jpg,jpeg,png,gif,webp,bmp,svg,ico' },
+  { label: '视频', value: 'mp4,avi,mkv,mov,flv,wmv,webm,m4v' },
+  { label: '音频', value: 'mp3,wav,flac,ogg,aac,m4a' },
+  { label: '文档', value: 'pdf,doc,docx,xls,xlsx,csv,ppt,pptx,txt,md' },
+  { label: '压缩包', value: 'zip,rar,7z,tar,gz,bz2' },
+];
+const SEARCH_SIZE_OPTIONS = [
+  { label: '小于 1 MB', value: 'lt1m' },
+  { label: '1 - 10 MB', value: '1to10m' },
+  { label: '10 - 100 MB', value: '10to100m' },
+  { label: '大于 100 MB', value: 'gt100m' },
+];
+const SEARCH_SIZE_MAP: Record<string, [string, string]> = {
+  lt1m: ['', '1048576'],
+  '1to10m': ['1048576', '10485760'],
+  '10to100m': ['10485760', '104857600'],
+  gt100m: ['104857600', ''],
+};
+const searchSizePreset = ref('');
 async function doSearch() {
   const q = searchQ.value.trim();
   if (!q) return;
   searching.value = true;
   try {
+    const [minSize, maxSize] = SEARCH_SIZE_MAP[searchSizePreset.value] || ['', ''];
     let url = `/search?q=${encodeURIComponent(q)}`;
     if (searchFilters.value.type) url += `&type=${encodeURIComponent(searchFilters.value.type)}`;
-    if (searchFilters.value.minSize) url += `&minSize=${searchFilters.value.minSize}`;
-    if (searchFilters.value.maxSize) url += `&maxSize=${searchFilters.value.maxSize}`;
+    if (minSize) url += `&minSize=${minSize}`;
+    if (maxSize) url += `&maxSize=${maxSize}`;
     if (searchFilters.value.since) url += `&since=${encodeURIComponent(searchFilters.value.since)}`;
     if (searchFilters.value.until) url += `&until=${encodeURIComponent(searchFilters.value.until)}`;
     const r = await api(url);
@@ -1728,6 +1819,16 @@ function photoUrl(row: any) {
 }
 
 const route = useRoute();
+/* 深链重入（如从标签页跳转 ?storage=&path=）：keep-alive 下 onMounted 不重跑，用 watch 响应 */
+watch(
+  () => [route.query.storage, route.query.path],
+  ([s, p]) => {
+    if (!s && !p) return;
+    if (s) storageId.value = Number(s);
+    if (p) path.value = String(p);
+    load();
+  }
+);
 onMounted(async () => {
   // 恢复持久化位置（刷新后回到上次浏览位置），使文件缓存能命中
   const loc = restoreLocation();
@@ -1781,30 +1882,6 @@ onMounted(async () => {
       <div class="drop-overlay-inner">
         <el-icon :size="48"><Upload /></el-icon>
         <div>松开以上传文件</div>
-      </div>
-    </div>
-    <!-- ⌘K 命令面板（仅 command 主题；Meta+K / Ctrl+K 打开，↑↓/Enter/Esc 键盘导航） -->
-    <div v-if="layoutType === 'command' && cmdkOpen" class="cmdk-panel">
-      <input
-        ref="cmdkInputRef"
-        v-model="cmdkQuery"
-        class="cmdk-input"
-        placeholder="搜索当前文件夹…"
-        @keydown="onCmdkKeydown"
-      />
-      <div class="cmdk-list">
-        <div
-          v-for="(item, i) in cmdkResults"
-          :key="item.path"
-          class="cmdk-item"
-          :class="{ active: i === cmdkActiveIndex }"
-          @click="selectCmdk(i)"
-          @mouseenter="cmdkActiveIndex = i"
-        >
-          <span class="cmdk-icon">{{ item.isDir ? '📁' : '📄' }}</span>
-          <span class="cmdk-name">{{ item.name }}</span>
-        </div>
-        <div v-if="cmdkResults.length === 0" class="cmdk-empty">无匹配结果</div>
       </div>
     </div>
     <!-- 仪表盘统计卡片（4 张 + 趋势 chip + --i 入场 stagger） -->
@@ -1933,6 +2010,7 @@ onMounted(async () => {
                   <el-dropdown-item command="tag-filter"><el-icon><PriceTag /></el-icon> 标签筛选</el-dropdown-item>
                   <el-dropdown-item command="transcode-tasks"><el-icon><Film /></el-icon> 转码任务</el-dropdown-item>
                   <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon> 刷新</el-dropdown-item>
+                  <el-dropdown-item command="shortcuts"><el-icon><Keyboard /></el-icon> 键盘快捷键</el-dropdown-item>
                   <el-dropdown-item command="multi-select"><el-icon><Check /></el-icon> {{ multiSelectMode ? '退出多选' : '多选模式' }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -2014,6 +2092,9 @@ onMounted(async () => {
                 </button>
                 <button class="mm-item" @click="tabletMoreRef?.hide(); handleToolbarMore('refresh')">
                   <el-icon><Refresh /></el-icon><span>刷新</span>
+                </button>
+                <button class="mm-item" @click="tabletMoreRef?.hide(); shortcutDialog = true">
+                  <el-icon><Keyboard /></el-icon><span>键盘快捷键</span>
                 </button>
                 <template v-if="multiSelectMode">
                   <div class="mm-sep"></div>
@@ -2113,11 +2194,42 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 选中信息栏（仅多选模式） -->
-      <div v-if="multiSelectMode && selected.length" class="selection-bar">
-        <span>已选择 <b>{{ selected.length }}</b> 项</span>
-        <el-button link size="small" @click="clearSelection">取消选择</el-button>
+      <!-- 批量浮动操作条（多选模式：底部居中悬浮，计数 + 全选/反选 + 批量操作） -->
+      <div v-if="multiSelectMode" class="selection-bar glass fade-up">
+        <span class="sb-count">已选 <b>{{ selected.length }}</b> 项</span>
+        <button class="sb-btn" @click="selectAll">全选</button>
+        <button class="sb-btn" @click="invertSelection">反选</button>
+        <span class="sb-sep" />
+        <button class="sb-btn" :disabled="!selected.length || batchDownloading" @click="doBatchDownload">
+          <el-icon><Download /></el-icon> 下载
+        </button>
+        <button class="sb-btn" :disabled="!selected.length" @click="openBatchMove('move')">
+          <el-icon><Rank /></el-icon> 移动
+        </button>
+        <button class="sb-btn" :disabled="!selected.length" @click="openBatchMove('copy')">
+          <el-icon><CopyDocument /></el-icon> 复制
+        </button>
+        <button class="sb-btn" :disabled="!selected.length" @click="doBatchStar">
+          <el-icon><Star /></el-icon> 收藏
+        </button>
+        <button class="sb-btn sb-danger" :disabled="!selected.length" @click="doBatchDelete">
+          <el-icon><Delete /></el-icon> 删除
+        </button>
+        <span class="sb-sep" />
+        <button class="sb-btn" @click="clearSelection">
+          <el-icon><Close /></el-icon> 取消
+        </button>
       </div>
+
+      <!-- 键盘快捷键说明 -->
+      <el-dialog v-model="shortcutDialog" title="键盘快捷键" width="460px">
+        <div class="shortcut-list">
+          <div v-for="s in SHORTCUTS" :key="s.keys" class="shortcut-row">
+            <kbd class="shortcut-kbd">{{ s.keys }}</kbd>
+            <span>{{ s.desc }}</span>
+          </div>
+        </div>
+      </el-dialog>
 
       <!-- 网格视图（毛玻璃卡片 + 悬浮微动画） -->
       <div v-if="view === 'grid'" class="file-grid">
@@ -2150,12 +2262,16 @@ onMounted(async () => {
             />
           </div>
           <div class="fc-icon">
-            <el-icon :size="42" :color="fileType(row.name, row.isDir).color">
+            <img v-if="thumbMap[row.path]" :src="thumbMap[row.path]" :alt="row.name" class="fc-thumb" loading="lazy" />
+            <el-icon v-else :size="42" :color="fileType(row.name, row.isDir).color">
               <component :is="fileType(row.name, row.isDir).icon" />
             </el-icon>
           </div>
           <div class="fc-name" :title="row.name">{{ row.name }}</div>
-          <div class="fc-meta">{{ row.isDir ? '文件夹' : fmtSize(row.size) }}</div>
+          <div class="fc-meta">
+            {{ row.isDir ? '文件夹' : fmtSize(row.size) }}
+            <span v-if="fileTag(row)" class="ft-tag" :style="fileTagStyle(row)">{{ fileTag(row)!.text }}</span>
+          </div>
           <div class="fc-actions" @click.stop>
             <!-- 统一按钮顺序：核心操作 → 删除 → 三个点菜单 -->
             <!-- 文件夹：分享 → 重命名 → 删除 → 三个点 -->
@@ -2210,6 +2326,7 @@ onMounted(async () => {
                     </el-dropdown-item>
                     <el-dropdown-item command="share"><el-icon><Share /></el-icon>分享</el-dropdown-item>
                     <el-dropdown-item command="rename"><el-icon><EditPen /></el-icon>重命名</el-dropdown-item>
+                    <el-dropdown-item command="detail"><el-icon><Ticket /></el-icon>详情</el-dropdown-item>
                     <el-dropdown-item command="props"><el-icon><InfoFilled /></el-icon>属性</el-dropdown-item>
                     <el-dropdown-item v-if="isArchive(row.name)" command="archive"><el-icon><Files /></el-icon>压缩包内容</el-dropdown-item>
                     <el-dropdown-item v-if="row.name.toLowerCase().endsWith('.zip')" command="decompress"><el-icon><Box /></el-icon>解压</el-dropdown-item>
@@ -2220,7 +2337,11 @@ onMounted(async () => {
           </div>
         </div>
         </template>
-        <div v-if="hasLoaded && !loading && !entries.length" class="empty">此文件夹为空</div>
+        <EmptyState
+          v-if="hasLoaded && !loading && !entries.length"
+          title="此文件夹为空"
+          description="上传文件、新建文件夹，或使用「上传文件夹」批量导入"
+        />
       </div>
 
       <!-- 列表视图 -->
@@ -2238,10 +2359,12 @@ onMounted(async () => {
         <el-table-column v-if="multiSelectMode" type="selection" width="40" />
         <el-table-column prop="name" label="名称" min-width="300" sortable>
           <template #default="{ row }">
-            <el-icon class="f-icon" :color="fileType(row.name, row.isDir).color">
+            <img v-if="thumbMap[row.path]" :src="thumbMap[row.path]" class="f-thumb" loading="lazy" />
+            <el-icon v-else class="f-icon" :color="fileType(row.name, row.isDir).color">
               <component :is="fileType(row.name, row.isDir).icon" />
             </el-icon>
             <span class="f-name" :class="{ dir: row.isDir }" @click.stop="openDir(row)">{{ row.name }}</span>
+            <span v-if="fileTag(row)" class="ft-tag" :style="fileTagStyle(row)">{{ fileTag(row)!.text }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="size" label="大小" width="120" sortable>
@@ -2291,6 +2414,7 @@ onMounted(async () => {
                     <el-dropdown-menu>
                       <el-dropdown-item command="share">分享</el-dropdown-item>
                       <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                      <el-dropdown-item command="detail">详情</el-dropdown-item>
                       <el-dropdown-item command="move">移动</el-dropdown-item>
                       <el-dropdown-item command="copy">复制</el-dropdown-item>
                       <el-dropdown-item command="props">属性</el-dropdown-item>
@@ -2305,6 +2429,13 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
+        <template #empty>
+          <EmptyState
+            v-if="hasLoaded"
+            title="此文件夹为空"
+            description="上传文件、新建文件夹，或使用「上传文件夹」批量导入"
+          />
+        </template>
       </el-table>
 
       <!-- 照片视图（纯图片画廊） -->
@@ -2318,7 +2449,11 @@ onMounted(async () => {
           <img :src="photoUrl(row)" :alt="row.name" loading="lazy" />
           <div class="photo-overlay">{{ row.name }}</div>
         </div>
-        <div v-if="hasLoaded && !loading && !photoEntries.length" class="empty">此文件夹没有图片文件</div>
+        <EmptyState
+          v-if="hasLoaded && !loading && !photoEntries.length"
+          title="没有图片文件"
+          description="此文件夹下暂无图片，上传图片后可在此画廊浏览"
+        />
       </div>
     </div>
 
@@ -2483,11 +2618,25 @@ onMounted(async () => {
         <el-input v-model="searchQ" placeholder="输入文件名关键字" @keyup.enter="doSearch" />
         <el-button type="primary" :loading="searching" @click="doSearch">搜索</el-button>
       </div>
-      <!-- 高级过滤 -->
+      <!-- 搜索历史 chips：点击直接以该词搜索，右侧清空调 DELETE /search-history -->
+      <div v-if="searchHistory.length" class="search-history">
+        <span class="sh-label">最近搜索</span>
+        <span
+          v-for="h in searchHistory"
+          :key="h"
+          class="sh-chip"
+          @click="useHistoryQuery(h)"
+        >{{ h }}</span>
+        <button class="sh-clear" @click="clearSearchHistory">清空</button>
+      </div>
+      <!-- 高级过滤（类型/大小预设 + 时间范围） -->
       <div class="search-filters">
-        <el-input v-model="searchFilters.type" placeholder="扩展名 (如 pdf, jpg)" size="small" style="width: 160px" />
-        <el-input v-model="searchFilters.minSize" placeholder="最小大小(B)" size="small" style="width: 120px" />
-        <el-input v-model="searchFilters.maxSize" placeholder="最大大小(B)" size="small" style="width: 120px" />
+        <el-select v-model="searchFilters.type" placeholder="文件类型" size="small" clearable style="width: 140px">
+          <el-option v-for="o in SEARCH_TYPE_OPTIONS" :key="o.label" :label="o.label" :value="o.value" />
+        </el-select>
+        <el-select v-model="searchSizePreset" placeholder="大小范围" size="small" clearable style="width: 140px">
+          <el-option v-for="o in SEARCH_SIZE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
+        </el-select>
         <el-date-picker v-model="searchFilters.since" type="date" placeholder="起始日期" size="small" style="width: 140px" />
         <el-date-picker v-model="searchFilters.until" type="date" placeholder="截止日期" size="small" style="width: 140px" />
       </div>
@@ -2590,6 +2739,18 @@ onMounted(async () => {
         <div v-else-if="!propsLoading" class="empty">无数据</div>
       </div>
     </el-drawer>
+
+    <!-- 文件详情抽屉（概览 / 版本历史 / 评论） -->
+    <FileDetailDrawer
+      v-model="detailDrawer"
+      :storage-id="storageId"
+      :path="detailTarget?.path || ''"
+      :name="detailTarget?.name || ''"
+      :size="detailTarget?.size"
+      :mtime="detailTarget?.mtime"
+      :is-image="detailIsImage(detailTarget)"
+      @restored="load"
+    />
 
     <!-- 图片 / 视频 / 音频 / PDF / 代码 预览（增强版） -->
     <el-dialog
@@ -2851,6 +3012,9 @@ onMounted(async () => {
         </button>
         <button class="ctx-item" @click.stop="ctxAction('copy')">
           <el-icon><CopyDocument /></el-icon> 复制
+        </button>
+        <button class="ctx-item" @click.stop="ctxAction('detail')">
+          <el-icon><Ticket /></el-icon> 详情
         </button>
         <button class="ctx-item" @click.stop="ctxAction('props')">
           <el-icon><InfoFilled /></el-icon> 属性
@@ -3480,20 +3644,87 @@ onMounted(async () => {
   padding-top: 8px;
 }
 
-/* 选中信息栏 */
+/* 批量浮动操作条：底部居中悬浮，glass 风格 */
 .selection-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  max-width: calc(100vw - 32px);
+  overflow-x: auto;
+}
+.sb-count {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.sb-count b {
+  color: var(--accent);
+}
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.sb-btn:hover:not(:disabled) {
+  background: var(--glass-bg-hover);
+}
+.sb-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.sb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.sb-btn.sb-danger {
+  color: #ef4444;
+}
+.sb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--glass-border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* 键盘快捷键说明 */
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shortcut-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 16px;
-  margin-bottom: 12px;
-  background: var(--accent-soft);
-  border-radius: 10px;
-  font-size: 13px;
-  color: var(--text-secondary);
+  font-size: 14px;
 }
-.selection-bar b {
-  color: var(--accent);
+.shortcut-kbd {
+  min-width: 110px;
+  text-align: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* 网格视图（P4）：auto-fill + clamp 列宽；gap/pad/radius 跟随主题 --card-* 变量 */
@@ -3590,6 +3821,21 @@ onMounted(async () => {
   display: grid;
   place-items: center;
 }
+.fc-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.f-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 6px;
+  vertical-align: middle;
+  margin-right: 8px;
+}
 .fc-name {
   font-size: 14px;
   font-weight: 500;
@@ -3647,6 +3893,17 @@ onMounted(async () => {
   color: var(--text-secondary);
   font-size: 14px;
 }
+.ft-tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 
 /* 列表视图 */
 .file-table {
@@ -3683,6 +3940,45 @@ onMounted(async () => {
   display: flex;
   gap: 10px;
   margin-bottom: 12px;
+}
+/* 搜索历史 chips（glass 变量，点击即搜） */
+.search-history {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sh-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.sh-chip {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.sh-chip:hover {
+  background: var(--glass-bg-hover);
+}
+.sh-chip:active {
+  transform: scale(0.95);
+}
+.sh-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.sh-clear:hover {
+  color: var(--accent);
 }
 .search-table {
   width: 100%;
@@ -4131,67 +4427,7 @@ onMounted(async () => {
   display: none;
 }
 
-/* ⌘K 命令面板（等宽仅 .fc-name / .cmdk-*，body 保持 sans） */
-.cmdk-panel {
-  position: fixed;
-  top: 20vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(640px, calc(100vw - 32px));
-  max-height: min(480px, calc(100vh - 24vh));
-  background: #1e2128;
-  border: 1px solid #2e323c;
-  border-radius: 8px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
-  z-index: 2000;
-  display: flex;
-  flex-direction: column;
-}
-.cmdk-input {
-  height: 48px;
-  font-size: 16px;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid #2e323c;
-  color: #e6e8ec;
-  padding: 0 16px;
-  outline: none;
-}
-.cmdk-list {
-  overflow-y: auto;
-  padding: 8px;
-}
-.cmdk-item {
-  height: 40px;
-  font-size: 14px;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border-radius: 4px;
-  cursor: pointer;
-  color: #e6e8ec;
-  border-left: 2px solid transparent; /* 占位：active 指示条不引起行内容位移 */
-  transition: background 80ms;
-}
-.cmdk-item.active {
-  background: #262a33;
-  border-left: 2px solid #ff6b35; /* 点睛：active 行左侧橙色指示条 */
-}
-.cmdk-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.cmdk-empty {
-  padding: 16px 12px;
-  font-size: 14px;
-  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
-  color: #9aa1ad;
-  text-align: center;
-}
+/* ⌘K 私有面板已移除：全局命令面板见 components/CommandPalette.vue */
 
 /* ---------- 顶部导航布局：更紧凑（P9：与 spec §8 topnav 观感统一） ---------- */
 .files-topnav .files-glass {
